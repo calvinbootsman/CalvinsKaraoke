@@ -1,0 +1,314 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>Calvin's Karaoke Player</title>
+    <style>
+        body {
+            margin: 0;
+            font-family: Segoe UI, sans-serif;
+            background: linear-gradient(135deg, #111827, #1f2937 45%, #0f172a);
+            color: #f9fafb;
+            min-height: 100vh;
+            padding: 22px;
+            box-sizing: border-box;
+        }
+        .panel {
+            max-width: 860px;
+            margin: 0 auto;
+            border: 1px solid rgba(148, 163, 184, 0.35);
+            border-radius: 14px;
+            background: rgba(15, 23, 42, 0.8);
+            padding: 18px;
+        }
+        h1 { margin: 0 0 8px 0; font-size: 1.35rem; }
+        #songTitle { color: #cbd5e1; margin: 0 0 14px 0; }
+        #debug {
+            margin-top: 14px;
+            border: 1px solid rgba(100, 116, 139, 0.5);
+            border-radius: 10px;
+            background: rgba(2, 6, 23, 0.7);
+            padding: 10px;
+            font-family: Consolas, monospace;
+            font-size: 0.84rem;
+            white-space: pre-wrap;
+            color: #cbd5e1;
+            min-height: 130px;
+        }
+        #lyrics {
+            margin-top: 20px;
+            max-height: 60vh;
+            overflow-y: auto;
+            border: 1px solid rgba(100, 116, 139, 0.5);
+            border-radius: 10px;
+            padding: 16px;
+            line-height: 1.6;
+            background: rgba(2, 6, 23, 0.7);
+        }
+        .line {
+            opacity: 0.45;
+            transition: all 0.2s ease;
+            margin: 2px 0;
+            font-size: 1.06rem;
+        }
+        .line.active {
+            opacity: 1;
+            color: #fde68a;
+            transform: translateX(4px);
+            font-weight: 700;
+        }
+    </style>
+</head>
+<body>
+    <div class="panel">
+        <h1>Now Singing</h1>
+        <p id="songTitle">No song loaded.</p>
+        <audio id="player" controls style="width:100%"></audio>
+        <div id="debug"></div>
+        <div id="lyrics"></div>
+    </div>
+    <script>
+        const audioEl = document.getElementById('player');
+        const titleEl = document.getElementById('songTitle');
+        const lyricsEl = document.getElementById('lyrics');
+        const debugEl = document.getElementById('debug');
+        let lyricRows = [];
+        let activeIndex = -1;
+        let lastCommandId = 0;
+        let heartbeatTimer = null;
+        let debugLines = [];
+        let commandChannel = null;
+        const commandFeedPath = '/_karaoke_command.json';
+
+        function writeDebug(message, meta = null) {
+            const stamp = new Date().toLocaleTimeString();
+            let line = `${stamp} | ${message}`;
+            if (meta !== null) {
+                try {
+                    line += ` | ${JSON.stringify(meta)}`;
+                } catch (error) {
+                    line += ' | <meta-json-error>';
+                }
+            }
+            debugLines = [...debugLines, line].slice(-14);
+            const now = {
+                src: audioEl.currentSrc || '(none)',
+                currentTime: Number(audioEl.currentTime || 0).toFixed(2),
+                paused: audioEl.paused,
+                readyState: audioEl.readyState,
+                lastCommandId,
+            };
+            debugEl.textContent = `Debug\\n${debugLines.join('\\n')}\\n\\nAudioState: ${JSON.stringify(now)}`;
+        }
+
+        function renderLyrics() {
+            lyricsEl.innerHTML = '';
+            lyricRows.forEach((row) => {
+                const div = document.createElement('div');
+                div.className = 'line';
+                div.textContent = row.text;
+                lyricsEl.appendChild(div);
+            });
+            activeIndex = -1;
+        }
+
+        function highlightLyric(currentTime) {
+            if (!lyricRows.length) return;
+            let index = -1;
+            for (let i = 0; i < lyricRows.length; i += 1) {
+                if (currentTime >= lyricRows[i].time) {
+                    index = i;
+                } else {
+                    break;
+                }
+            }
+
+            if (index === activeIndex) return;
+
+            const children = lyricsEl.children;
+            if (activeIndex >= 0 && children[activeIndex]) {
+                children[activeIndex].classList.remove('active');
+            }
+
+            if (index >= 0 && children[index]) {
+                children[index].classList.add('active');
+                children[index].scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+            activeIndex = index;
+        }
+
+        function applySong(song) {
+            if (!song) return;
+            titleEl.textContent = song.title || 'Unknown song';
+            audioEl.src = song.audioUrl || '';
+            lyricRows = Array.isArray(song.lyrics) ? song.lyrics : [];
+            renderLyrics();
+            writeDebug('applySong', {
+                title: song.title || null,
+                audioUrl: song.audioUrl || null,
+                lyricCount: lyricRows.length,
+            });
+        }
+
+        function handleCommand(payload) {
+            if (!payload || !payload.command) return;
+            writeDebug('handleCommand', { id: payload.id, command: payload.command, song: payload.song?.title || null });
+
+            if (payload.command === 'load_and_play') {
+                applySong(payload.song);
+                audioEl.currentTime = 0;
+                audioEl.play().catch(() => {});
+                return;
+            }
+
+            if (payload.command === 'play') {
+                audioEl.play().catch(() => {});
+                return;
+            }
+
+            if (payload.command === 'pause') {
+                audioEl.pause();
+            }
+        }
+
+        function maybeHandleCommand(payload) {
+            if (!payload || !payload.id) return;
+            if (payload.id <= lastCommandId) {
+                writeDebug('dropCommandDuplicate', { id: payload.id, lastCommandId });
+                return;
+            }
+            writeDebug('acceptCommand', { id: payload.id, command: payload.command });
+            lastCommandId = payload.id;
+            handleCommand(payload);
+            try {
+                localStorage.setItem('karaoke-last-consumed-command-id', String(payload.id));
+            } catch (error) {
+                writeDebug('ackWriteError', { message: String(error) });
+            }
+        }
+
+        function consumePersistedCommand() {
+            try {
+                const raw = localStorage.getItem('karaoke-command');
+                if (!raw) return;
+                writeDebug('consumePersistedCommand');
+                maybeHandleCommand(JSON.parse(raw));
+            } catch (error) {
+                writeDebug('consumePersistedCommandError', { message: String(error) });
+            }
+        }
+
+        async function fetchLatestCommand(minId = 0) {
+            try {
+                const response = await fetch(`${commandFeedPath}?cb=${Date.now()}`, { cache: 'no-store' });
+                if (!response.ok) {
+                    writeDebug('fetchLatestCommandHttpError', { status: response.status });
+                    return;
+                }
+
+                const payload = await response.json();
+                const payloadId = Number(payload?.id || 0);
+                if (!payloadId) return;
+                if (payloadId < Number(minId || 0)) {
+                    writeDebug('fetchLatestCommandTooOld', { payloadId, minId });
+                    return;
+                }
+                writeDebug('fetchLatestCommandApply', { payloadId });
+                maybeHandleCommand(payload);
+            } catch (error) {
+                writeDebug('fetchLatestCommandError', { message: String(error) });
+            }
+        }
+
+        function consumeCommandFromLocationHash() {
+            try {
+                const rawHash = window.location.hash || '';
+                if (rawHash.startsWith('#cmdid=')) {
+                    const minId = Number(rawHash.slice(7) || 0);
+                    writeDebug('consumeHashCommandId', { minId });
+                    fetchLatestCommand(minId);
+                    history.replaceState(null, '', window.location.pathname + window.location.search);
+                    return;
+                }
+                if (!rawHash.startsWith('#cmd=')) return;
+                const encoded = rawHash.slice(5);
+                if (!encoded) return;
+                writeDebug('consumeHashCommand');
+                maybeHandleCommand(JSON.parse(decodeURIComponent(encoded)));
+                history.replaceState(null, '', window.location.pathname + window.location.search);
+            } catch (error) {
+                writeDebug('consumeHashCommandError', { message: String(error) });
+            }
+        }
+
+        window.__karaokeReceiveCommand = maybeHandleCommand;
+
+        try {
+            commandChannel = new BroadcastChannel('karaoke-player-commands');
+            commandChannel.onmessage = (event) => {
+                writeDebug('broadcastCommandEvent');
+                maybeHandleCommand(event.data);
+            };
+        } catch (error) {
+            writeDebug('broadcastInitError', { message: String(error) });
+        }
+
+        function updateHeartbeat() {
+            try {
+                localStorage.setItem('karaoke-player-heartbeat', String(Date.now()));
+            } catch (error) {
+            }
+        }
+
+        updateHeartbeat();
+        heartbeatTimer = setInterval(updateHeartbeat, 1500);
+
+        window.addEventListener('storage', (event) => {
+            if (event.key !== 'karaoke-command' || !event.newValue) return;
+            try {
+                writeDebug('storageCommandEvent');
+                maybeHandleCommand(JSON.parse(event.newValue));
+            } catch (error) {
+                writeDebug('storageCommandEventError', { message: String(error) });
+            }
+        });
+
+        window.addEventListener('message', (event) => {
+            try {
+                if (!event || !event.data || event.data.type !== 'karaoke-command') return;
+                writeDebug('postMessageCommandEvent');
+                maybeHandleCommand(event.data.payload);
+            } catch (error) {
+                writeDebug('postMessageCommandEventError', { message: String(error) });
+            }
+        });
+
+        window.addEventListener('beforeunload', () => {
+            if (heartbeatTimer) {
+                clearInterval(heartbeatTimer);
+            }
+            if (commandChannel) {
+                commandChannel.close();
+            }
+        });
+
+        consumeCommandFromLocationHash();
+        fetchLatestCommand(lastCommandId + 1);
+        setTimeout(() => fetchLatestCommand(lastCommandId + 1), 500);
+        consumePersistedCommand();
+        writeDebug('playerReady');
+
+        audioEl.addEventListener('timeupdate', () => {
+            highlightLyric(audioEl.currentTime || 0);
+        });
+        audioEl.addEventListener('loadedmetadata', () => writeDebug('audioLoadedMetadata', { duration: audioEl.duration }));
+        audioEl.addEventListener('play', () => writeDebug('audioPlay'));
+        audioEl.addEventListener('pause', () => writeDebug('audioPause'));
+        audioEl.addEventListener('ended', () => writeDebug('audioEnded'));
+        audioEl.addEventListener('error', () => {
+            const code = audioEl.error ? audioEl.error.code : null;
+            writeDebug('audioError', { code });
+        });
+    </script>
+</body>
+</html>

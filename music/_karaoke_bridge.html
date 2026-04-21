@@ -1,0 +1,127 @@
+<script>
+const commandPayload = {"id": 1, "command": "load_and_play", "song": {"title": "Sleep Token - Blood Sport (from the room below)", "audioUrl": "http://127.0.0.1:62510/Sleep%20Token%20-%20Blood%20Sport%20%28from%20the%20room%20below%29/no_vocals.mp3", "lyrics": [{"time": 14.06, "text": "I wanna roll the numbers"}, {"time": 17.86, "text": "I wanna feel my stars align again"}, {"time": 21.84, "text": "Even if the earth breaks like burnt skin"}, {"time": 26.21, "text": "And the heavens just won't open up for me"}, {"time": 31.47, "text": "Would you invite me in again?"}, {"time": 34.61, "text": "Won't you pay for your arrogance?"}, {"time": 38.33, "text": "Won't you show me your weakness?"}, {"time": 43.84, "text": "I made loving you a blood sport"}, {"time": 48.04, "text": "I made loving you a blood sport"}, {"time": 51.51, "text": "I made loving you a blood sport"}, {"time": 55.05, "text": "I can't win"}, {"time": 58.58, "text": "I made loving you a blood sport"}, {"time": 62.63, "text": "I made loving you a blood sport"}, {"time": 66.26, "text": "I made loving you a blood sport"}, {"time": 69.96000000000001, "text": "I can't win"}, {"time": 73.19, "text": "So let's play"}, {"time": 84.62, "text": "And somewhere"}, {"time": 88.06, "text": "Somewhere, the atoms stopped fusing"}, {"time": 92.07, "text": "I'm still your favourite regret"}, {"time": 95.55, "text": "You're still my weapon of choosing"}, {"time": 99.25999999999999, "text": "And out there"}, {"time": 102.8, "text": "Stuck in a quantum pattern"}, {"time": 106.67, "text": "Tangled with what I never said"}, {"time": 110.22999999999999, "text": "You say it doesn't matter"}, {"time": 113.9, "text": "I wanna be forgiven"}, {"time": 117.37, "text": "I wanna choke up chunks of my own sins"}, {"time": 121.45, "text": "Even if the sky cracks in mourning"}, {"time": 125.62, "text": "And the heavens just won't open up for me"}, {"time": 131.3, "text": "Would you invite me in again?"}, {"time": 134.45, "text": "Let me pay for my arrogance?"}, {"time": 138.01, "text": "Won't you show me your weakness?"}, {"time": 143.17000000000002, "text": "I made loving you a blood sport"}, {"time": 147.41, "text": "I made loving you a blood sport"}, {"time": 151.17000000000002, "text": "I made loving you a blood sport"}, {"time": 154.98, "text": "I can't win"}, {"time": 158.29, "text": "I made loving you a blood sport"}, {"time": 162.37, "text": "I made loving you a blood sport"}, {"time": 165.9, "text": "I made loving you a blood sport"}, {"time": 169.63, "text": "I can't win"}, {"time": 173.01, "text": "And somewhere (I made loving you a blood sport)"}, {"time": 177.51, "text": "Somewhere, the atoms stopped fusing (I made loving you a blood sport)"}, {"time": 181.98, "text": "I'm still your favourite regret (I made loving you a blood sport)"}, {"time": 184.4, "text": "You're still my weapon of choosing (I can't win)"}, {"time": 188.85, "text": "And out there (I made loving you a blood sport)"}, {"time": 191.65, "text": "Stuck in a quantum pattern (I made loving you a blood sport)"}, {"time": 196.05, "text": "Tangled with what I never said (I made loving you a blood sport)"}, {"time": 199.25, "text": "You say it doesn't matter"}]}, "openWindow": true};
+const popupName = "calvins-karaoke-player";
+const playerUrl = "http://127.0.0.1:62510/_karaoke_player.html";
+const playerOrigin = new URL(playerUrl).origin;
+
+function buildPlayerUrlWithCommand(payload) {
+    if (!payload || !payload.id) return playerUrl;
+    try {
+        return `${playerUrl}#cmdid=${Number(payload.id || 0)}`;
+    } catch (error) {
+        return playerUrl;
+    }
+}
+
+function ensurePopup(payload = null) {
+    const openUrl = payload ? buildPlayerUrlWithCommand(payload) : playerUrl;
+    const popup = window.open(openUrl, popupName, 'popup,width=980,height=760');
+    if (!popup) return null;
+    return popup;
+}
+
+function hasActivePlayerHeartbeat() {
+    try {
+        const raw = localStorage.getItem('karaoke-player-heartbeat');
+        const lastBeat = Number(raw || 0);
+        return (Date.now() - lastBeat) < 5000;
+    } catch (error) {
+        return false;
+    }
+}
+
+function dispatchToPopup(popup, payload, attempt = 0) {
+    if (!popup || popup.closed) return;
+
+    try {
+        popup.postMessage({ type: 'karaoke-command', payload }, playerOrigin);
+    } catch (error) {
+    }
+
+    try {
+        if (typeof popup.__karaokeReceiveCommand === 'function') {
+            popup.__karaokeReceiveCommand(payload);
+            return;
+        }
+    } catch (error) {
+        return;
+    }
+
+    if (attempt < 40) {
+        setTimeout(() => dispatchToPopup(popup, payload, attempt + 1), 50);
+    }
+}
+
+function getLastConsumedCommandId() {
+    try {
+        return Number(localStorage.getItem('karaoke-last-consumed-command-id') || 0);
+    } catch (error) {
+        return 0;
+    }
+}
+
+function forceOpenAndDispatch(payload) {
+    const popup = ensurePopup(payload);
+    if (!popup) return;
+    publishCommand(payload);
+    dispatchToPopup(popup, payload);
+    popup.focus();
+}
+
+function publishCommand(payload) {
+    try {
+        const channel = new BroadcastChannel('karaoke-player-commands');
+        channel.postMessage(payload);
+        channel.close();
+    } catch (error) {
+    }
+}
+
+function ensureCommandDelivery(payload, shouldOpen) {
+    publishCommand(payload);
+
+    const existingPopup = ensurePopup();
+    if (existingPopup) {
+        dispatchToPopup(existingPopup, payload);
+    }
+
+    setTimeout(() => {
+        publishCommand(payload);
+    }, 250);
+
+    setTimeout(() => {
+        publishCommand(payload);
+    }, 900);
+
+    setTimeout(() => {
+        const consumedId = getLastConsumedCommandId();
+        if (consumedId >= Number(payload.id || 0)) return;
+        if (shouldOpen) {
+            forceOpenAndDispatch(payload);
+        }
+    }, 300);
+
+    setTimeout(() => {
+        const consumedId = getLastConsumedCommandId();
+        if (consumedId >= Number(payload.id || 0)) return;
+        if (shouldOpen) {
+            forceOpenAndDispatch(payload);
+        }
+    }, 1200);
+}
+
+if (commandPayload && commandPayload.id) {
+    try {
+        localStorage.setItem('karaoke-command', JSON.stringify(commandPayload));
+    } catch (error) {
+    }
+
+    const shouldOpen = !!commandPayload.openWindow || commandPayload.command === 'load_and_play';
+    const needsOpen = shouldOpen && !hasActivePlayerHeartbeat();
+    if (needsOpen) {
+        forceOpenAndDispatch(commandPayload);
+    }
+
+    ensureCommandDelivery(commandPayload, shouldOpen);
+}
+</script>
