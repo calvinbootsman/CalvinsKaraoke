@@ -42,7 +42,7 @@ def render_player_bridge() -> None:
     command_id = int(st.session_state.get("player_command_id", 0))
     bridge_url = f"{media_server_base_url}/_karaoke_bridge.html?cb={command_id}"
     st.iframe(bridge_url, height=1)
-    st.session_state["player_command"] = None
+    # st.session_state["player_command"] = None
     if command_payload:
         log_debug_event(
             "render_player_bridge_command",

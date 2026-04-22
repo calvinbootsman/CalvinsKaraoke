@@ -2,3 +2,4 @@
 /.venv
 /Modelfile
 /__pycache__
+*.pyc

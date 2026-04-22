@@ -1,4 +1,3 @@
-import json
 import time
 from urllib.parse import quote
 
@@ -8,6 +7,24 @@ from config import MUSIC_DIR
 from core.file_utils import parse_lrc_file
 from core.server import ensure_media_server
 from state.session import log_debug_event
+
+
+def get_effective_current_time() -> float:
+    current_time = float(st.session_state.get("current_time", 0.0))
+    if not bool(st.session_state.get("is_playing", False)):
+        return max(0.0, current_time)
+
+    playback_started_at = st.session_state.get("playback_started_at")
+    if playback_started_at is None:
+        return max(0.0, current_time)
+
+    return max(0.0, time.time() - float(playback_started_at))
+
+
+def refresh_playback_time() -> float:
+    effective_time = get_effective_current_time()
+    st.session_state["current_time"] = effective_time
+    return effective_time
 
 
 def build_song_payload(song_title: str) -> tuple[dict[str, object] | None, str | None]:
@@ -28,13 +45,20 @@ def build_song_payload(song_title: str) -> tuple[dict[str, object] | None, str |
     }, None
 
 
-def queue_player_command(command: str, song_payload: dict[str, object] | None = None, open_window: bool = False) -> None:
+def queue_player_command(
+    command: str,
+    song_payload: dict[str, object] | None = None,
+    open_window: bool = False,
+    current_time: float | None = None,
+) -> None:
     next_id = int(st.session_state.get("player_command_id", 0)) + 1
+    command_time = float(st.session_state.get("current_time", 0.0)) if current_time is None else float(current_time)
     command_payload = {
         "id": next_id,
         "command": command,
         "song": song_payload,
         "openWindow": open_window,
+        "currentTime": max(0.0, command_time),
     }
     st.session_state["player_command_id"] = next_id
     st.session_state["player_command"] = command_payload
@@ -43,6 +67,7 @@ def queue_player_command(command: str, song_payload: dict[str, object] | None = 
         "command": command,
         "song": song_payload.get("title") if isinstance(song_payload, dict) else None,
         "openWindow": open_window,
+        "currentTime": max(0.0, command_time),
         "ts": time.time(),
     }
     log_debug_event(
@@ -51,6 +76,7 @@ def queue_player_command(command: str, song_payload: dict[str, object] | None = 
         command=command,
         song=command_payload.get("song", {}).get("title") if isinstance(command_payload.get("song"), dict) else None,
         open_window=open_window,
+        current_time=max(0.0, command_time),
     )
 
 
@@ -68,31 +94,46 @@ def play_song_at_index(index: int) -> None:
         log_debug_event("play_song_at_index_payload_error", index=index, song_title=song_title, error=error)
         return
 
-    st.session_state["playback_index"] = index
+    # Remove song from queue when it starts playing
+    new_queue = [s for i, s in enumerate(queue) if i != index]
+    st.session_state["queue"] = new_queue
+    
+    st.session_state["playback_index"] = -1
     st.session_state["current_song"] = song_title
     st.session_state["is_playing"] = True
-    log_debug_event("play_song_at_index", index=index, song_title=song_title)
-    queue_player_command("load_and_play", song_payload=payload, open_window=True)
+    st.session_state["current_time"] = 0.0
+    st.session_state["playback_started_at"] = time.time()
+    st.session_state["audio_render_nonce"] = int(st.session_state.get("audio_render_nonce", 0)) + 1
+    log_debug_event("play_song_at_index", index=index, song_title=song_title, removed_from_queue=True)
+    queue_player_command("load_and_play", song_payload=payload, open_window=True, current_time=0.0)
 
 
 def play_action() -> None:
     queue: list[str] = st.session_state.get("queue", [])
-    if not queue:
+    current_index = int(st.session_state.get("playback_index", -1))
+    current_song = st.session_state.get("current_song")
+    is_playing = bool(st.session_state.get("is_playing", False))
+    
+    # Allow resuming even if queue is empty (last song was removed when played)
+    if not queue and not current_song:
         st.warning("Queue is empty. Add songs first.")
         log_debug_event("play_action_empty_queue")
         return
 
-    current_index = int(st.session_state.get("playback_index", -1))
-    current_song = st.session_state.get("current_song")
-    is_playing = bool(st.session_state.get("is_playing", False))
-
-    if current_song in queue and current_index >= 0 and not is_playing:
+    if current_song and not is_playing:
+        resume_time = refresh_playback_time()
         st.session_state["is_playing"] = True
+        st.session_state["playback_started_at"] = time.time() - resume_time
+        st.session_state["audio_render_nonce"] = int(st.session_state.get("audio_render_nonce", 0)) + 1
         log_debug_event("play_action_resume", current_index=current_index, current_song=current_song)
-        queue_player_command("play")
+       
+        payload = None
+        if st.session_state.get("current_song"):
+            payload = build_song_payload(st.session_state.get("current_song"))[0]
+        queue_player_command("play", song_payload=payload, current_time=resume_time)
         return
 
-    if current_song in queue and current_index >= 0 and is_playing:
+    if current_song and is_playing:
         st.toast("Song is already playing.")
         log_debug_event("play_action_already_playing", current_index=current_index, current_song=current_song)
         return
@@ -106,9 +147,17 @@ def pause_action() -> None:
         log_debug_event("pause_action_no_song")
         return
 
+    pause_time = refresh_playback_time()
     st.session_state["is_playing"] = False
-    log_debug_event("pause_action", current_song=st.session_state.get("current_song"))
-    queue_player_command("pause")
+    st.session_state["playback_started_at"] = None
+    st.session_state["audio_render_nonce"] = int(st.session_state.get("audio_render_nonce", 0)) + 1
+    
+    payload = None
+    if st.session_state.get("current_song"):
+        payload = build_song_payload(st.session_state.get("current_song"))[0]
+    
+    log_debug_event("pause_action", current_song=st.session_state.get("current_song"), pause_time=pause_time)
+    queue_player_command("pause", song_payload=payload, current_time=pause_time)
 
 
 def next_action() -> None:

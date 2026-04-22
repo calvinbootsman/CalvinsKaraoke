@@ -43,6 +43,7 @@ def render_debug_panel() -> None:
                 "current_song": st.session_state.get("current_song"),
                 "playback_index": st.session_state.get("playback_index"),
                 "is_playing": st.session_state.get("is_playing"),
+                "current_time": round(float(st.session_state.get("current_time", 0.0)), 2),
                 "queue_size": len(st.session_state.get("queue", [])),
             }
         )

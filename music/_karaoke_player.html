@@ -23,6 +23,29 @@
         }
         h1 { margin: 0 0 8px 0; font-size: 1.35rem; }
         #songTitle { color: #cbd5e1; margin: 0 0 14px 0; }
+        #statusRow {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 12px;
+            font-size: 0.94rem;
+            color: #cbd5e1;
+        }
+        #playbackState {
+            padding: 4px 10px;
+            border-radius: 999px;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+        }
+        .state-playing {
+            background: #14532d;
+            color: #dcfce7;
+        }
+        .state-paused {
+            background: #7f1d1d;
+            color: #fee2e2;
+        }
         #debug {
             margin-top: 14px;
             border: 1px solid rgba(100, 116, 139, 0.5);
@@ -63,22 +86,72 @@
     <div class="panel">
         <h1>Now Singing</h1>
         <p id="songTitle">No song loaded.</p>
-        <audio id="player" controls style="width:100%"></audio>
+        <div id="statusRow">
+            <span id="timeLabel">00:00</span>
+            <span id="playbackState" class="state-paused">Paused</span>
+        </div>
         <div id="debug"></div>
         <div id="lyrics"></div>
     </div>
     <script>
-        const audioEl = document.getElementById('player');
         const titleEl = document.getElementById('songTitle');
         const lyricsEl = document.getElementById('lyrics');
         const debugEl = document.getElementById('debug');
+        const timeLabelEl = document.getElementById('timeLabel');
+        const playbackStateEl = document.getElementById('playbackState');
         let lyricRows = [];
         let activeIndex = -1;
         let lastCommandId = 0;
         let heartbeatTimer = null;
+        let lyricTicker = null;
         let debugLines = [];
         let commandChannel = null;
         const commandFeedPath = '/_karaoke_command.json';
+        let timelineTime = 0;
+        let timelineIsPlaying = false;
+        let timelineStartedAt = null;
+
+        function formatTime(seconds) {
+            const clamped = Math.max(0, Math.floor(Number(seconds || 0)));
+            const minutes = Math.floor(clamped / 60);
+            const secs = clamped % 60;
+            return `${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+        }
+
+        function getTimelineTime() {
+            if (!timelineIsPlaying || timelineStartedAt === null) {
+                return Math.max(0, timelineTime);
+            }
+            return Math.max(0, (Date.now() - timelineStartedAt) / 1000);
+        }
+
+        function updatePlaybackBadge() {
+            if (timelineIsPlaying) {
+                playbackStateEl.textContent = 'Playing';
+                playbackStateEl.classList.add('state-playing');
+                playbackStateEl.classList.remove('state-paused');
+                return;
+            }
+
+            playbackStateEl.textContent = 'Paused';
+            playbackStateEl.classList.add('state-paused');
+            playbackStateEl.classList.remove('state-playing');
+        }
+
+        function setTimeline(timeSeconds, playing) {
+            timelineTime = Math.max(0, Number(timeSeconds || 0));
+            timelineIsPlaying = !!playing;
+            timelineStartedAt = timelineIsPlaying ? (Date.now() - timelineTime * 1000) : null;
+            timeLabelEl.textContent = formatTime(timelineTime);
+            updatePlaybackBadge();
+        }
+
+        function tickLyrics() {
+            const currentTime = getTimelineTime();
+            timelineTime = currentTime;
+            timeLabelEl.textContent = formatTime(currentTime);
+            highlightLyric(currentTime);
+        }
 
         function writeDebug(message, meta = null) {
             const stamp = new Date().toLocaleTimeString();
@@ -92,13 +165,11 @@
             }
             debugLines = [...debugLines, line].slice(-14);
             const now = {
-                src: audioEl.currentSrc || '(none)',
-                currentTime: Number(audioEl.currentTime || 0).toFixed(2),
-                paused: audioEl.paused,
-                readyState: audioEl.readyState,
+                currentTime: Number(getTimelineTime()).toFixed(2),
+                isPlaying: timelineIsPlaying,
                 lastCommandId,
             };
-            debugEl.textContent = `Debug\\n${debugLines.join('\\n')}\\n\\nAudioState: ${JSON.stringify(now)}`;
+            debugEl.textContent = `Debug\n${debugLines.join('\n')}\n\nPlaybackState: ${JSON.stringify(now)}`;
         }
 
         function renderLyrics() {
@@ -140,34 +211,39 @@
         function applySong(song) {
             if (!song) return;
             titleEl.textContent = song.title || 'Unknown song';
-            audioEl.src = song.audioUrl || '';
             lyricRows = Array.isArray(song.lyrics) ? song.lyrics : [];
             renderLyrics();
             writeDebug('applySong', {
                 title: song.title || null,
-                audioUrl: song.audioUrl || null,
                 lyricCount: lyricRows.length,
             });
         }
 
         function handleCommand(payload) {
+            console.log('Handling command', payload);
             if (!payload || !payload.command) return;
             writeDebug('handleCommand', { id: payload.id, command: payload.command, song: payload.song?.title || null });
 
             if (payload.command === 'load_and_play') {
                 applySong(payload.song);
-                audioEl.currentTime = 0;
-                audioEl.play().catch(() => {});
+                setTimeline(payload.currentTime || 0, true);
                 return;
             }
 
             if (payload.command === 'play') {
-                audioEl.play().catch(() => {});
+                applySong(payload.song);
+                setTimeline(payload.currentTime || timelineTime, true);
                 return;
             }
 
             if (payload.command === 'pause') {
-                audioEl.pause();
+                applySong(payload.song);
+                setTimeline(payload.currentTime || getTimelineTime(), false);
+            }
+
+            if (payload.command === 'open_window') {
+                applySong(payload.song);
+                setTimeline(payload.currentTime || 0, false);
             }
         }
 
@@ -287,6 +363,9 @@
             if (heartbeatTimer) {
                 clearInterval(heartbeatTimer);
             }
+            if (lyricTicker) {
+                clearInterval(lyricTicker);
+            }
             if (commandChannel) {
                 commandChannel.close();
             }
@@ -296,19 +375,10 @@
         fetchLatestCommand(lastCommandId + 1);
         setTimeout(() => fetchLatestCommand(lastCommandId + 1), 500);
         consumePersistedCommand();
+        lyricTicker = setInterval(tickLyrics, 150);
+        setTimeline(0, false);
         writeDebug('playerReady');
-
-        audioEl.addEventListener('timeupdate', () => {
-            highlightLyric(audioEl.currentTime || 0);
-        });
-        audioEl.addEventListener('loadedmetadata', () => writeDebug('audioLoadedMetadata', { duration: audioEl.duration }));
-        audioEl.addEventListener('play', () => writeDebug('audioPlay'));
-        audioEl.addEventListener('pause', () => writeDebug('audioPause'));
-        audioEl.addEventListener('ended', () => writeDebug('audioEnded'));
-        audioEl.addEventListener('error', () => {
-            const code = audioEl.error ? audioEl.error.code : null;
-            writeDebug('audioError', { code });
-        });
     </script>
 </body>
 </html>
+

@@ -1,5 +1,5 @@
 import streamlit as st
-
+import time
 from config import MUSIC_DIR
 from core.file_utils import (
     filter_songs_by_query,
@@ -7,13 +7,14 @@ from core.file_utils import (
     is_youtube_url,
     list_saved_music,
 )
-from core.playback import next_action, pause_action, play_action
+from core.playback import build_song_payload, get_effective_current_time
 from core.processing import download_audio, get_lyrics, get_song_title, separate_audio_into_stems
 from state.playback import sync_playback_with_queue
 from state.session import (
     hydrate_session_from_runtime_state,
     initialize_playback_state,
     initialize_queue_state,
+    log_debug_event,
     persist_runtime_state,
 )
 from ui.bridge import render_player_bridge
@@ -25,6 +26,7 @@ from ui.panels import (
     show_fading_info,
     show_fading_success,
 )
+from ui.player import render_overview_player
 
 st.set_page_config(layout="wide", page_title="Calvin's Karaoke")
 st.title("Calvin's Karaoke")
@@ -80,24 +82,7 @@ with main_col:
             except Exception as error:
                 st.error(f"Processing failed: {error}")
 
-    st.subheader("Playback controls")
-    now_playing = st.session_state.get("current_song")
-    if now_playing:
-        status = "Playing" if st.session_state.get("is_playing") else "Paused"
-        st.info(f"Now playing: {now_playing} ({status})")
-    else:
-        st.info("Now playing: Nothing yet")
-
-    control_col_play, control_col_pause, control_col_next = st.columns(3)
-    with control_col_play:
-        if st.button("Play", use_container_width=True):
-            play_action()
-    with control_col_pause:
-        if st.button("Pause", use_container_width=True):
-            pause_action()
-    with control_col_next:
-        if st.button("Next song", use_container_width=True):
-            next_action()
+    render_overview_player()
 
     render_debug_panel()
 
@@ -110,7 +95,41 @@ with main_col:
         filtered_songs = filter_songs_by_query(saved_songs, search_query)
         render_saved_music_panel(filtered_songs)
 
+
+def open_window():
+    next_id = int(st.session_state.get("player_command_id", 0)) + 1
+    current_command = st.session_state.get("player_command", {})
+
+    current_song_title = st.session_state.get("current_song")
+    current_song = None
+    if current_song_title:
+        current_song = build_song_payload(str(current_song_title))[0]
+    current_time = get_effective_current_time()
+    # current_time
+    st.session_state["current_time"] = current_time
+
+    new_command = {
+        "id": next_id,
+        "command": "open_window",
+        "song": current_song,
+        "openWindow": True,
+        "currentTime": current_time,
+        "ts": time.time(),
+    }
+    # st.session_state["currentTime"] = current_time
+    # st.session_state["playback_started_at"] = True
+    st.session_state["player_command"] = new_command
+    st.session_state["player_command_id"] = next_id
+    # st.session_state["last_sent_command"] = new_command
+    # sync_playback_with_queue()
+    log_debug_event(
+        "open_window",
+        id=next_id,
+        command="open_windows",
+         open_window=True,
+        current_time=max(0.0, current_time),)
 with queue_col:
+    st.button("Open player window", on_click=open_window)
     render_queue_panel()
 
 render_player_bridge()
