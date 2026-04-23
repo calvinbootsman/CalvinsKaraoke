@@ -174,14 +174,17 @@
             debugEl.textContent = `Debug\n${debugLines.join('\n')}\n\nPlaybackState: ${JSON.stringify(now)}`;
         }
 
-        function renderLyrics() {
+        function renderLyrics(startIndex = 0, count = 6) {
             lyricsEl.innerHTML = '';
-            lyricRows.forEach((row) => {
+            const endIndex = Math.min(startIndex + count, lyricRows.length);
+            for (let i = startIndex; i < endIndex; i++) {
+                const row = lyricRows[i];
                 const div = document.createElement('div');
                 div.className = 'line';
                 div.textContent = row.text;
+                div.dataset.index = i;
                 lyricsEl.appendChild(div);
-            });
+            }
             activeIndex = -1;
         }
 
@@ -198,14 +201,25 @@
 
             if (index === activeIndex) return;
 
+            // Calculate visible window: 6 lines with current line as the second
+            let startIndex = Math.max(0, index - 1);
+            // If first line hasn't been sung yet (index < 1), start from 0
+            if (index < 1) {
+                startIndex = 0;
+            }
+            
+            // Re-render with the new window
+            renderLyrics(startIndex, 6);
+            
+            // Now update the active class on the re-rendered elements
             const children = lyricsEl.children;
-            if (activeIndex >= 0 && children[activeIndex]) {
-                children[activeIndex].classList.remove('active');
+            if (activeIndex >= 0 && activeIndex >= startIndex && activeIndex < startIndex + 6) {
+                children[activeIndex - startIndex].classList.remove('active');
             }
 
-            if (index >= 0 && children[index]) {
-                children[index].classList.add('active');
-                children[index].scrollIntoView({ behavior: 'smooth', block: 'center' });
+            if (index >= 0 && index >= startIndex && index < startIndex + 6) {
+                children[index - startIndex].classList.add('active');
+                children[index - startIndex].scrollIntoView({ behavior: 'smooth', block: 'center' });
             }
             activeIndex = index;
         }
