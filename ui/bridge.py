@@ -3,7 +3,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from config import MUSIC_DIR
+from config import DEBUG_ENABLED, MUSIC_DIR
 from core.server import ensure_media_server
 from state.session import log_debug_event
 
@@ -34,6 +34,7 @@ def render_player_bridge() -> None:
     )
 
     player_file = MUSIC_DIR / "_karaoke_player.html"
+    player_html = player_html.replace("__DEBUG_ENABLED__", str(DEBUG_ENABLED).lower())
     player_file.write_text(player_html, encoding="utf-8")
 
     bridge_file = MUSIC_DIR / "_karaoke_bridge.html"

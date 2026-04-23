@@ -3,7 +3,7 @@ import time
 
 import streamlit as st
 
-from config import MAX_DEBUG_EVENTS
+from config import DEBUG_ENABLED, MAX_DEBUG_EVENTS
 
 
 @st.cache_resource
@@ -96,6 +96,8 @@ def persist_runtime_state() -> None:
 
 
 def log_debug_event(event: str, **data: object) -> None:
+    if not DEBUG_ENABLED:
+        return
     events = list(st.session_state.get("debug_events", []))
     events.append({
         "ts": time.time(),

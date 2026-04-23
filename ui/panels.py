@@ -6,6 +6,7 @@ from st_keyup import st_keyup
 
 from core.file_utils import list_available_files
 from core.playback import add_song_to_queue, move_queue_item
+from config import DEBUG_ENABLED
 
 sort_items = getattr(importlib.import_module("streamlit_sortables"), "sort_items")
 
@@ -37,6 +38,9 @@ def show_fading_info(message: str, duration_seconds: int = 5) -> None:
 
 
 def render_debug_panel() -> None:
+    if not DEBUG_ENABLED:
+        return
+    
     with st.expander("Playback debug", expanded=False):
         st.write(
             {

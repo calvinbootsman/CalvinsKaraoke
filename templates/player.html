@@ -90,7 +90,7 @@
             <span id="timeLabel">00:00</span>
             <span id="playbackState" class="state-paused">Paused</span>
         </div>
-        <div id="debug"></div>
+        <div id="debug" style="display: DEBUG_ENABLED ? "block" : "none""></div>
         <div id="lyrics"></div>
     </div>
     <script>
@@ -105,6 +105,7 @@
         let heartbeatTimer = null;
         let lyricTicker = null;
         let debugLines = [];
+        const DEBUG_ENABLED = __DEBUG_ENABLED__;
         let commandChannel = null;
         const commandFeedPath = '/_karaoke_command.json';
         let timelineTime = 0;
@@ -154,6 +155,7 @@
         }
 
         function writeDebug(message, meta = null) {
+            if (!DEBUG_ENABLED) return;
             const stamp = new Date().toLocaleTimeString();
             let line = `${stamp} | ${message}`;
             if (meta !== null) {
@@ -381,4 +383,3 @@
     </script>
 </body>
 </html>
-
