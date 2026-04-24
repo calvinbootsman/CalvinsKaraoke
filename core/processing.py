@@ -9,6 +9,10 @@ import yt_dlp
 from config import DEMUX_MODEL, DEMUX_OUTPUT_ROOT
 from core.file_utils import find_downloaded_audio, sanitize_title
 
+import librosa
+import numpy as np
+from scipy.signal import medfilt
+
 
 def get_song_title(url: str) -> str:
     ydl_opts = {
@@ -70,3 +74,21 @@ def get_lyrics(song_dir: Path, song_title: str) -> None:
 
     lrc_text = syncedlyrics.search(song_title)
     song_path.write_text(lrc_text or "", encoding="utf-8")
+
+def extract_audio(audio_path: Path, song_dir: Path):
+    y, sr = librosa.load(audio_path, sr=None, mono=True)
+    f0, voiced_flag, voiced_probs = librosa.pyin(y, 
+                                             fmin=librosa.note_to_hz('C2'), 
+                                             fmax=librosa.note_to_hz('C7'))
+    
+    times = librosa.times_like(f0, sr=sr)
+
+    smoothed_f0 = medfilt(f0, kernel_size=15)
+
+    midi_continuous = librosa.hz_to_midi(smoothed_f0)
+
+    midi_quantized = np.round(midi_continuous)
+    quantized_f0 = librosa.midi_to_hz(midi_quantized)
+
+    combined = np.column_stack((times, quantized_f0, voiced_probs))
+    np.savetxt(song_dir / "extracted_f0.csv", combined, delimiter=",", header="time,frequency,confidence", comments="")
