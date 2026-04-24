@@ -3,6 +3,18 @@ const commandPayload = __COMMAND_JSON__;
 const popupName = "calvins-karaoke-player";
 const playerUrl = __PLAYER_URL_JSON__;
 const playerOrigin = new URL(playerUrl).origin;
+const bridgeSeqStorageKey = 'karaoke-bridge-command-seq';
+let bridgeCommandSeq = 0;
+let latestSongPayload = (commandPayload && commandPayload.song) ? commandPayload.song : null;
+let popupRef = null;
+
+try {
+    const persistedSeq = Number(localStorage.getItem(bridgeSeqStorageKey) || 0);
+    bridgeCommandSeq = Math.max(bridgeCommandSeq, persistedSeq);
+} catch (error) {
+}
+
+bridgeCommandSeq = Math.max(bridgeCommandSeq, Number(commandPayload && commandPayload.id ? commandPayload.id : 0));
 
 function buildPlayerUrlWithCommand(payload) {
     if (!payload || !payload.id) return playerUrl;
@@ -17,7 +29,13 @@ function ensurePopup(payload = null) {
     const openUrl = payload ? buildPlayerUrlWithCommand(payload) : playerUrl;
     const popup = window.open(openUrl, popupName, 'popup,width=980,height=760');
     if (!popup) return null;
+    popupRef = popup;
     return popup;
+}
+
+function getActivePopup() {
+    if (!popupRef || popupRef.closed) return null;
+    return popupRef;
 }
 
 function hasActivePlayerHeartbeat() {
@@ -77,41 +95,96 @@ function publishCommand(payload) {
     }
 }
 
-function ensureCommandDelivery(payload, shouldOpen) {
-    publishCommand(payload);
+function allocateBridgeCommandId() {
+    bridgeCommandSeq = Math.max(bridgeCommandSeq, getLastConsumedCommandId());
+    bridgeCommandSeq += 1;
+    try {
+        localStorage.setItem(bridgeSeqStorageKey, String(bridgeCommandSeq));
+    } catch (error) {
+    }
+    return bridgeCommandSeq;
+}
 
-    const popup = shouldOpen ? ensurePopup(payload) : ensurePopup();
+function normalizeOutboundPayload(payload) {
+    if (!payload || typeof payload !== 'object') return payload;
+    return {
+        ...payload,
+        id: allocateBridgeCommandId(),
+    };
+}
+
+function ensureCommandDelivery(payload, shouldOpen) {
+    const normalizedPayload = normalizeOutboundPayload(payload);
+    if (!normalizedPayload) return;
+
+    if (normalizedPayload.song) {
+        latestSongPayload = normalizedPayload.song;
+    }
+
+    if (normalizedPayload.command === 'sync') {
+        publishCommand(normalizedPayload);
+        const activePopup = getActivePopup();
+        if (activePopup) {
+            dispatchToPopup(activePopup, normalizedPayload);
+        }
+        return;
+    }
+
+    publishCommand(normalizedPayload);
+
+    const popup = shouldOpen ? ensurePopup(normalizedPayload) : getActivePopup();
     if (popup) {
-        dispatchToPopup(popup, payload);
+        dispatchToPopup(popup, normalizedPayload);
         if (shouldOpen) {
             popup.focus();
         }
     }
 
     setTimeout(() => {
-        publishCommand(payload);
+        publishCommand(normalizedPayload);
     }, 250);
 
     setTimeout(() => {
-        publishCommand(payload);
+        publishCommand(normalizedPayload);
     }, 900);
 
     setTimeout(() => {
         const consumedId = getLastConsumedCommandId();
-        if (consumedId >= Number(payload.id || 0)) return;
+        if (consumedId >= Number(normalizedPayload.id || 0)) return;
         if (shouldOpen) {
-            forceOpenAndDispatch(payload);
+            forceOpenAndDispatch(normalizedPayload);
         }
     }, 300);
 
     setTimeout(() => {
         const consumedId = getLastConsumedCommandId();
-        if (consumedId >= Number(payload.id || 0)) return;
+        if (consumedId >= Number(normalizedPayload.id || 0)) return;
         if (shouldOpen) {
-            forceOpenAndDispatch(payload);
+            forceOpenAndDispatch(normalizedPayload);
         }
     }, 1200);
 }
+
+function buildBridgeForwardPayload(mainPayload) {
+    if (!mainPayload || !mainPayload.command) return null;
+    return {
+        command: mainPayload.command,
+        song: mainPayload.song || latestSongPayload,
+        openWindow: false,
+        currentTime: Math.max(0, Number(mainPayload.currentTime || 0)),
+        isPlaying: !!mainPayload.isPlaying,
+    };
+}
+
+window.addEventListener('message', (event) => {
+    try {
+        if (!event || !event.data || event.data.type !== 'karaoke-main-command') return;
+        const forwarded = buildBridgeForwardPayload(event.data.payload);
+        if (!forwarded) return;
+        ensureCommandDelivery(forwarded, false);
+    } catch (error) {
+    }
+});
 
 if (commandPayload && commandPayload.id) {
     try {

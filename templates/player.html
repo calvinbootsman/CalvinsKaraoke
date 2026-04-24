@@ -109,6 +109,7 @@
         const timeLabelEl = document.getElementById('timeLabel');
         const playbackStateEl = document.getElementById('playbackState');
         let lyricRows = [];
+        let currentSongTitle = null;
         let activeIndex = -1;
         let lastCommandId = 0;
         let heartbeatTimer = null;
@@ -271,6 +272,7 @@
         debugEl.style.display = DEBUG_ENABLED ? 'block' : 'none';
         let commandChannel = null;
         const commandFeedPath = '/_karaoke_command.json';
+        const playbackStateKey = 'karaoke-main-player-state';
         let timelineTime = 0;
         let timelineIsPlaying = false;
         let timelineStartedAt = null;
@@ -391,6 +393,7 @@
         function applySong(song) {
             if (!song) return;
             titleEl.textContent = song.title || 'Unknown song';
+            currentSongTitle = song.title || null;
             lyricRows = Array.isArray(song.lyrics) ? song.lyrics : [];
             renderLyrics();
             if (song.pitchUrl) loadPitchData(song.pitchUrl);
@@ -409,19 +412,59 @@
 
             if (payload.command === 'load_and_play') {
                 applySong(payload.song);
-                setTimeline(payload.currentTime || 0, true);
+                setTimeline(payload.currentTime ?? 0, true);
                 return;
             }
 
             if (payload.command === 'play') {
                 applySong(payload.song);
-                setTimeline(payload.currentTime || timelineTime, true);
+                const fallbackNow = getTimelineTime();
+                let targetTime = payload.currentTime ?? fallbackNow;
+                // Backend play timestamps can be stale after user scrubbing.
+                // For backend-origin play packets, keep the already synced timeline
+                // when the incoming timestamp differs noticeably.
+                if (typeof payload.isPlaying !== 'boolean') {
+                    const drift = Math.abs(Number(targetTime || 0) - Number(fallbackNow || 0));
+                    if (drift > 0.35) {
+                        targetTime = fallbackNow;
+                    }
+                }
+                setTimeline(targetTime, true);
                 return;
             }
 
             if (payload.command === 'pause') {
                 applySong(payload.song);
-                setTimeline(payload.currentTime || getTimelineTime(), false);
+                const fallbackNow = getTimelineTime();
+                let targetTime = payload.currentTime ?? fallbackNow;
+                // Backend pause timestamps can lag slightly behind live synced time.
+                // If this is a backend-origin pause packet (no explicit isPlaying flag),
+                // keep the currently synced timeline when the difference is noticeable.
+                if (typeof payload.isPlaying !== 'boolean') {
+                    const drift = Math.abs(Number(targetTime || 0) - Number(fallbackNow || 0));
+                    if (drift > 0.35) {
+                        targetTime = fallbackNow;
+                    }
+                }
+                setTimeline(targetTime, false);
+                return;
+            }
+
+            if (payload.command === 'seek') {
+                applySong(payload.song);
+                const nextPlaying = typeof payload.isPlaying === 'boolean' ? payload.isPlaying : timelineIsPlaying;
+                setTimeline(payload.currentTime ?? getTimelineTime(), nextPlaying);
+                return;
+            }
+
+            if (payload.command === 'sync') {
+                const nextPlaying = typeof payload.isPlaying === 'boolean' ? payload.isPlaying : timelineIsPlaying;
+                const targetTime = payload.currentTime ?? getTimelineTime();
+                const drift = Math.abs(getTimelineTime() - Number(targetTime || 0));
+                // If drift > 0.35s, it smoothly jumps to correct itself. 
+                if (drift > 0.35 || nextPlaying !== timelineIsPlaying) {
+                    setTimeline(targetTime, nextPlaying);
+                }
                 return;
             }
 
@@ -433,8 +476,30 @@
 
             if (payload.command === 'open_window') {
                 applySong(payload.song);
-                setTimeline(payload.currentTime || 0, false);
+                setTimeline(payload.currentTime ?? 0, false);
                 return;
+            }
+        }
+
+        function syncFromMainPlaybackState(force = false) {
+            try {
+                const raw = localStorage.getItem(playbackStateKey);
+                if (!raw) return;
+                const parsed = JSON.parse(raw);
+                if (!parsed || !parsed.songTitle || !Number.isFinite(Number(parsed.currentTime))) return;
+                if (currentSongTitle && parsed.songTitle !== currentSongTitle) return;
+
+                const targetTime = Math.max(0, Number(parsed.currentTime || 0));
+                const targetPlaying = !!parsed.isPlaying;
+                const localTime = getTimelineTime();
+                const drift = Math.abs(localTime - targetTime);
+                const playingChanged = targetPlaying !== timelineIsPlaying;
+
+                if (force || drift > 0.35 || playingChanged) {
+                    setTimeline(targetTime, targetPlaying);
+                }
+            } catch (error) {
+                writeDebug('syncMainPlaybackStateError', { message: String(error) });
             }
         }
 
@@ -531,6 +596,10 @@
         heartbeatTimer = setInterval(updateHeartbeat, 1500);
 
         window.addEventListener('storage', (event) => {
+            if (event.key === playbackStateKey && event.newValue) {
+                syncFromMainPlaybackState(true);
+                return;
+            }
             if (event.key !== 'karaoke-command' || !event.newValue) return;
             try {
                 writeDebug('storageCommandEvent');
@@ -566,6 +635,7 @@
         fetchLatestCommand(lastCommandId + 1);
         setTimeout(() => fetchLatestCommand(lastCommandId + 1), 500);
         consumePersistedCommand();
+        setInterval(() => syncFromMainPlaybackState(false), 250);
         window.addEventListener('resize', () => { resizePitchCanvas(); drawPitch(getTimelineTime()); });
         lyricTicker = setInterval(tickLyrics, 150);
         writeDebug('playerReady');

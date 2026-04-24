@@ -1,9 +1,9 @@
+import json
+
 import streamlit as st
-import streamlit.components.v1 as components
 
 from core.playback import (
     build_song_payload,
-    get_effective_current_time,
     next_action,
     stop_action,
     toggle_play_pause_action,
@@ -16,8 +16,8 @@ def _format_time(seconds: float) -> str:
     return f"{minutes:02d}:{secs:02d}"
 
 
-def _render_live_time_label(initial_time: float, is_playing: bool) -> None:
-    components.html(
+def _render_live_time_label(initial_time: float, is_playing: bool, song_title: str) -> None:
+    st.iframe(
         f'''
         <div id="liveMainTime" style="color:#9ca3af;font-size:0.85rem;margin:2px 0 8px 0;">Current time: 00:00</div>
         <script>
@@ -25,6 +25,8 @@ def _render_live_time_label(initial_time: float, is_playing: bool) -> None:
             const playing = {str(is_playing).lower()};
             const baseTime = Number({float(initial_time)} || 0);
             const startedAt = Date.now();
+            const songTitle = {json.dumps(song_title)};
+            const playbackStateKey = 'karaoke-main-player-state';
 
             function formatTime(seconds) {{
                 const total = Math.max(0, Math.floor(Number(seconds || 0)));
@@ -34,12 +36,28 @@ def _render_live_time_label(initial_time: float, is_playing: bool) -> None:
             }}
 
             function update() {{
-                const elapsed = playing ? ((Date.now() - startedAt) / 1000) : 0;
-                timeEl.textContent = 'Current time: ' + formatTime(baseTime + elapsed);
+                let displayTime = null;
+                try {{
+                    const raw = localStorage.getItem(playbackStateKey);
+                    if (raw) {{
+                        const parsed = JSON.parse(raw);
+                        if (parsed && parsed.songTitle === songTitle && Number.isFinite(Number(parsed.currentTime))) {{
+                            displayTime = Number(parsed.currentTime);
+                        }}
+                    }}
+                }} catch (error) {{
+                }}
+
+                if (displayTime === null) {{
+                    const elapsed = playing ? ((Date.now() - startedAt) / 1000) : 0;
+                    displayTime = baseTime + elapsed;
+                }}
+
+                timeEl.textContent = 'Current time: ' + formatTime(displayTime);
             }}
 
             update();
-            if (playing) setInterval(update, 250);
+            setInterval(update, 200);
         </script>
         ''',
         height=24,
@@ -52,9 +70,7 @@ def render_overview_player() -> None:
     current_song = st.session_state.get("current_song")
     is_playing = bool(st.session_state.get("is_playing", False))
     queue = st.session_state.get("queue", [])
-
-    effective_time = get_effective_current_time()
-    st.session_state["current_time"] = effective_time
+    committed_time = float(st.session_state.get("current_time", 0.0))
 
     if current_song:
         status = "Playing" if is_playing else "Paused"
@@ -63,7 +79,7 @@ def render_overview_player() -> None:
         st.info("Now playing: Nothing yet")
 
     if current_song:
-        _render_live_time_label(effective_time, is_playing)
+        _render_live_time_label(committed_time, is_playing, str(current_song))
 
     control_cols = st.columns(3)
 
@@ -90,9 +106,11 @@ def render_overview_player() -> None:
                 next_action()
                 st.rerun()
 
-    # Main page audio player is controlled from Streamlit state on rerun.
+    # Main page audio player stays anchored to committed Streamlit playback state.
     # The popup remains command-driven through the bridge.
-    
+
+  # ... (Keep your python variables and button logic at the top exactly as they are) ...
+
     if current_song:
         song_payload, error = build_song_payload(str(current_song))
         if error:
@@ -101,15 +119,18 @@ def render_overview_player() -> None:
 
         instrumental_url = song_payload.get("instrumentalUrl") if isinstance(song_payload, dict) else None
         vocals_url = song_payload.get("vocalsUrl") if isinstance(song_payload, dict) else None
+        song_title = str(current_song)
+        song_payload_json = json.dumps(song_payload)
         
         if not instrumental_url:
             st.warning("Missing playable instrumental URL for current song.")
             return
         
-        # Pre-compute volume default
         vocals_vol_default = '100' if vocals_url else '0'
         
-        # Height needs to account for both player and button
+        # 1. THE STATIC AUDIO PLAYER
+        # Notice we removed all Python variables that change during playback (like nonces and is_playing).
+        # This guarantees Streamlit NEVER destroys the iframe while a song is loaded.
         player_html = f'''
         <div style="background: rgba(15, 23, 42, 0.8); border: 1px solid rgba(148, 163, 184, 0.35); border-radius: 10px; padding: 16px; margin-bottom: 16px;">
             <div style="display: flex; gap: 16px; margin-bottom: 12px;">
@@ -126,6 +147,7 @@ def render_overview_player() -> None:
             </div>
             <input type="range" id="seekBar" min="0" max="100" value="0" style="width: 100%; cursor: pointer; margin-bottom: 12px;">
             <span id="currentTimeDisplay" style="color: #cbd5e1; font-size: 0.9rem; display: block; margin-bottom: 12px;">00:00</span>
+            
             <audio id="instrumentalAudio" src="{instrumental_url}" preload="auto" style="display: none;"></audio>
             {'<audio id="vocalsAudio" src="' + vocals_url + '" preload="auto" style="display: none;"></audio>' if vocals_url else ''}
         </div>
@@ -137,98 +159,165 @@ def render_overview_player() -> None:
             const currentTimeDisplay = document.getElementById('currentTimeDisplay');
             const instrumentalVol = document.getElementById('instrumentalVol');
             const vocalsVol = document.getElementById('vocalsVol');
-            const instrumentalVolValue = document.getElementById('instrumentalVolValue');
-            const vocalsVolValue = document.getElementById('vocalsVolValue');
-            const initialServerTime = Number({float(effective_time)} || 0);
-            const initialServerIsPlaying = {str(is_playing).lower()};
+            
+            const songTitle = {json.dumps(song_title)};
+            const songPayload = {song_payload_json};
+            const playbackStateKey = 'karaoke-main-player-state';
+            const commandKey = 'karaoke-streamlit-cmd';
+            
+            let lastHandledActionNonce = 0;
+            let lastHandledTimeNonce = 0;
             let isSeeking = false;
+            let lastBridgeSyncSentAt = 0;
 
-            instrumentalAudio.volume = instrumentalVol.value / 100;
-            if (vocalsAudio) vocalsAudio.volume = vocalsVol.value / 100;
+            function postToBridge(command, timeSeconds, force = false) {{
+                const now = Date.now();
+                if (!force && (now - lastBridgeSyncSentAt) < 250) return;
+                lastBridgeSyncSentAt = now;
+                const payload = {{ command, song: songPayload, currentTime: Math.max(0, Number(timeSeconds || 0)), isPlaying: !instrumentalAudio.paused, ts: now }};
+                try {{
+                    if (!window.parent || !window.parent.document) return;
+                    const iframes = window.parent.document.querySelectorAll('iframe');
+                    for (const frame of iframes) {{
+                        const src = String(frame.getAttribute('src') || '');
+                        if (!src.includes('_karaoke_bridge.html')) continue;
+                        if (!frame.contentWindow) continue;
+                        frame.contentWindow.postMessage({{ type: 'karaoke-main-command', payload }}, '*');
+                    }}
+                }} catch (error) {{}}
+            }}
 
-            function updateVolumeDisplay() {{
+            function pushStateToPopup(timeSeconds) {{
+                try {{
+                    localStorage.setItem(playbackStateKey, JSON.stringify({{
+                        songTitle, currentTime: Math.max(0, Number(timeSeconds || 0)), isPlaying: !instrumentalAudio.paused, ts: Date.now()
+                    }}));
+                }} catch (error) {{}}
+            }}
+
+            function updateTimeDisplay() {{
+                const currentTime = instrumentalAudio.currentTime;
+                const total = Math.max(0, Math.floor(currentTime || 0));
+                currentTimeDisplay.textContent = String(Math.floor(total / 60)).padStart(2, '0') + ':' + String(total % 60).padStart(2, '0');
+                if (instrumentalAudio.duration > 0 && !isNaN(instrumentalAudio.duration)) {{
+                    seekBar.max = String(instrumentalAudio.duration);
+                }}
+                seekBar.value = String(currentTime);
+            }}
+
+            // --- THE INVISIBLE LISTENER ---
+            // This listens to the invisible Streamlit component for Play/Pause/Stop clicks
+            window.addEventListener('storage', (e) => {{
+                if (e.key === commandKey && e.newValue) {{
+                    try {{
+                        const cmd = JSON.parse(e.newValue);
+                        
+                        // 1. Check if Streamlit forced a time jump (Stop button)
+                        if (cmd.time_nonce > lastHandledTimeNonce) {{
+                            lastHandledTimeNonce = cmd.time_nonce;
+                            instrumentalAudio.currentTime = cmd.time;
+                            if (vocalsAudio) vocalsAudio.currentTime = cmd.time;
+                        }}
+                        
+                        // 2. Check if Streamlit pressed Play/Pause
+                        if (cmd.action_nonce > lastHandledActionNonce) {{
+                            lastHandledActionNonce = cmd.action_nonce;
+                            if (cmd.is_playing) {{
+                                instrumentalAudio.play().catch(err => console.log("Browser requires a click on the page first", err));
+                                if (vocalsAudio) vocalsAudio.play().catch(()=>{{}});
+                            }} else {{
+                                instrumentalAudio.pause();
+                                if (vocalsAudio) vocalsAudio.pause();
+                            }}
+                        }}
+                    }} catch (err) {{}}
+                }}
+            }});
+
+            // Load initial state on page boot
+            try {{
+                const bootCmdRaw = localStorage.getItem(commandKey);
+                if (bootCmdRaw) {{
+                    const bootCmd = JSON.parse(bootCmdRaw);
+                    lastHandledActionNonce = bootCmd.action_nonce;
+                    lastHandledTimeNonce = bootCmd.time_nonce;
+                    instrumentalAudio.currentTime = bootCmd.time;
+                    if (bootCmd.is_playing) {{
+                        instrumentalAudio.play().catch(e=>{{}});
+                        if (vocalsAudio) vocalsAudio.play().catch(e=>{{}});
+                    }}
+                }}
+            }} catch(e) {{}}
+
+            seekBar.addEventListener('input', () => isSeeking = true);
+            seekBar.addEventListener('change', () => {{
+                isSeeking = false;
+                instrumentalAudio.currentTime = seekBar.value;
+                if (vocalsAudio) vocalsAudio.currentTime = seekBar.value;
+                pushStateToPopup(seekBar.value);
+                postToBridge('seek', seekBar.value, true);
+            }});
+
+            instrumentalAudio.addEventListener('timeupdate', () => {{
+                if (isSeeking) return;
+                updateTimeDisplay();
+                pushStateToPopup(instrumentalAudio.currentTime);
+                postToBridge('sync', instrumentalAudio.currentTime, false);
+            }});
+
+            instrumentalAudio.addEventListener('play', () => {{
+                pushStateToPopup(instrumentalAudio.currentTime);
+                postToBridge('play', instrumentalAudio.currentTime, true);
+            }});
+
+            instrumentalAudio.addEventListener('pause', () => {{
+                pushStateToPopup(instrumentalAudio.currentTime);
+                postToBridge('pause', instrumentalAudio.currentTime, true);
+            }});
+
+            const updateVolumeDisplay = function() {{
                 instrumentalAudio.volume = instrumentalVol.value / 100;
                 instrumentalVolValue.textContent = instrumentalVol.value + '%';
                 if (vocalsAudio) {{
                     vocalsAudio.volume = vocalsVol.value / 100;
                     vocalsVolValue.textContent = vocalsVol.value + '%';
                 }}
-            }}
-
-            function formatTime(seconds) {{
-                const total = Math.max(0, Math.floor(seconds || 0));
-                const minutes = Math.floor(total / 60);
-                const secs = total % 60;
-                return String(minutes).padStart(2, '0') + ':' + String(secs).padStart(2, '0');
-            }}
-
-            function updateTimeDisplay() {{
-                const currentTime = instrumentalAudio.currentTime;
-                const duration = instrumentalAudio.duration;
-                currentTimeDisplay.textContent = formatTime(currentTime);
-                if (duration > 0 && !isNaN(duration)) {{
-                    seekBar.value = (currentTime / duration) * 100;
-                }}
-            }}
-
-            function syncAudio(time) {{
-                instrumentalAudio.currentTime = time;
-                if (vocalsAudio) vocalsAudio.currentTime = time;
-            }}
-
+            }};
             instrumentalVol.addEventListener('input', updateVolumeDisplay);
-            vocalsVol.addEventListener('input', updateVolumeDisplay);
-
-            seekBar.addEventListener('input', () => isSeeking = true);
-            seekBar.addEventListener('change', () => {{
-                isSeeking = false;
-                const duration = instrumentalAudio.duration;
-                if (duration > 0 && !isNaN(duration)) {{
-                    const seekTime = (seekBar.value / 100) * duration;
-                    syncAudio(seekTime);
-                }}
-            }});
-
-            instrumentalAudio.addEventListener('timeupdate', () => {{
-                if (!isSeeking) {{
-                    updateTimeDisplay();
-                    if (vocalsAudio) {{
-                        if (Math.abs(vocalsAudio.currentTime - instrumentalAudio.currentTime) > 0.1) {{
-                            vocalsAudio.currentTime = instrumentalAudio.currentTime;
-                        }}
-                    }}
-                }}
-            }});
-
-            if (vocalsAudio) {{
-                vocalsAudio.addEventListener('timeupdate', () => {{
-                    if (!isSeeking && Math.abs(vocalsAudio.currentTime - instrumentalAudio.currentTime) > 0.1) {{
-                        vocalsAudio.currentTime = instrumentalAudio.currentTime;
-                    }}
-                }});
-            }}
-
-            instrumentalAudio.addEventListener('ended', () => {{
-                instrumentalAudio.currentTime = 0;
-                seekBar.value = 0;
-                if (vocalsAudio) vocalsAudio.currentTime = 0;
-            }});
-            if (vocalsAudio) vocalsAudio.addEventListener('ended', () => {{
-                vocalsAudio.currentTime = 0;
-            }});
-
+            if (vocalsAudio) vocalsVol.addEventListener('input', updateVolumeDisplay);
             updateVolumeDisplay();
-            updateTimeDisplay();
 
-            syncAudio(initialServerTime);
-
-            if (initialServerIsPlaying) {{
-                instrumentalAudio.play().catch(() => {{}});
-                if (vocalsAudio) vocalsAudio.play().catch(() => {{}});
-            }}
         </script>
         '''
         
-        components.html(player_html, height=200)
+        st.iframe(player_html, height=200)
+
+        # 2. THE INVISIBLE COMMAND INJECTOR
+        # This block contains the changing variables. It re-renders on every button click 
+        # and secretly updates localStorage, which triggers the listener in the static player above.
+        cmd_payload = {
+            "action_nonce": int(st.session_state.get("action_nonce", 0)),
+            "time_nonce": int(st.session_state.get("time_override_nonce", 0)),
+            "is_playing": bool(st.session_state.get("is_playing", False)),
+            "time": float(st.session_state.get("current_time", 0.0))
+        }
+        
+        injector_html = f'''
+        <script>
+            localStorage.setItem('karaoke-streamlit-cmd', JSON.stringify({json.dumps(cmd_payload)}));
+        </script>
+        '''
+
+        st.iframe(injector_html, height=1)
+
     elif queue:
-        st.caption("Press Play to start the first song in queue.")
+        st.caption("Press Play to start the first song in queue.")    
+        
+    with st.expander("🔍 Server State Debugger", expanded=True):
+        st.json({
+            "action_nonce": st.session_state.get("action_nonce", 0),
+            "time_override_nonce": st.session_state.get("time_override_nonce", 0),
+            "is_playing": st.session_state.get("is_playing", False),
+            "last_action_ts": st.session_state.get("last_action_ts", 0),
+            "current_song": str(current_song) if current_song else None
+        })

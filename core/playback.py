@@ -175,7 +175,6 @@ def pause_action() -> None:
     log_debug_event("pause_action", current_song=st.session_state.get("current_song"), pause_time=pause_time)
     queue_player_command("pause", song_payload=payload, open_window=True, current_time=pause_time)
 
-
 def stop_action() -> None:
     current_song = st.session_state.get("current_song")
     if not current_song:
@@ -187,6 +186,10 @@ def stop_action() -> None:
     st.session_state["current_time"] = 0.0
     st.session_state["playback_started_at"] = None
     st.session_state["audio_render_nonce"] = int(st.session_state.get("audio_render_nonce", 0)) + 1
+    
+    # NEW: Increment BOTH counters so JS overrides play state AND resets time to 0
+    st.session_state["action_nonce"] = int(st.session_state.get("action_nonce", 0)) + 1
+    st.session_state["time_override_nonce"] = int(st.session_state.get("time_override_nonce", 0)) + 1
 
     payload = None
     if current_song:
@@ -197,11 +200,19 @@ def stop_action() -> None:
 
 
 def toggle_play_pause_action() -> None:
-    if bool(st.session_state.get("is_playing", False)):
+    # 1. Flip the playing state directly and explicitly
+    current_state = bool(st.session_state.get("is_playing", False))
+    new_state = not current_state
+    st.session_state["is_playing"] = new_state
+    
+    # 2. Increment the nonce so JS knows a button was clicked
+    st.session_state["action_nonce"] = int(st.session_state.get("action_nonce", 0)) + 1
+    
+    # 3. Still call your original functions in case they log events or handle queues
+    if new_state:
+        play_action()
+    else:
         pause_action()
-        return
-    play_action()
-
 
 def next_action() -> None:
     queue: list[str] = st.session_state.get("queue", [])
