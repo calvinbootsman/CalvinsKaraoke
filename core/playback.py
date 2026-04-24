@@ -35,7 +35,14 @@ def build_song_payload(song_title: str) -> tuple[dict[str, object] | None, str |
 
     media_server_base_url = ensure_media_server()
     encoded_song_title = quote(song_title, safe="")
-    audio_url = f"{media_server_base_url}/{encoded_song_title}/no_vocals.mp3"
+    instrumental_url = f"{media_server_base_url}/{encoded_song_title}/no_vocals.mp3"
+    
+    # Check for vocals stem
+    vocals_path = song_dir / "vocals.mp3"
+    vocals_url = None
+    if vocals_path.exists():
+        vocals_url = f"{media_server_base_url}/{encoded_song_title}/vocals.mp3"
+    
     lyrics = parse_lrc_file(song_dir / "song.lrc")
 
     # Check for pitch data
@@ -46,7 +53,9 @@ def build_song_payload(song_title: str) -> tuple[dict[str, object] | None, str |
 
     return {
         "title": song_title,
-        "audioUrl": audio_url,
+        "audioUrl": instrumental_url,  # for backward compatibility
+        "instrumentalUrl": instrumental_url,
+        "vocalsUrl": vocals_url,
         "lyrics": lyrics,
         "pitchUrl": pitch_url,
     }, None
