@@ -422,11 +422,19 @@
             if (payload.command === 'pause') {
                 applySong(payload.song);
                 setTimeline(payload.currentTime || getTimelineTime(), false);
+                return;
+            }
+
+            if (payload.command === 'stop') {
+                applySong(payload.song);
+                setTimeline(0, false);
+                return;
             }
 
             if (payload.command === 'open_window') {
                 applySong(payload.song);
                 setTimeline(payload.currentTime || 0, false);
+                return;
             }
         }
 
@@ -560,7 +568,6 @@
         consumePersistedCommand();
         window.addEventListener('resize', () => { resizePitchCanvas(); drawPitch(getTimelineTime()); });
         lyricTicker = setInterval(tickLyrics, 150);
-        setTimeline(0, false);
         writeDebug('playerReady');
     </script>
 </body>

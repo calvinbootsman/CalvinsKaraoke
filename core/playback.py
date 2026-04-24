@@ -146,7 +146,7 @@ def play_action() -> None:
         payload = None
         if st.session_state.get("current_song"):
             payload = build_song_payload(st.session_state.get("current_song"))[0]
-        queue_player_command("play", song_payload=payload, current_time=resume_time)
+        queue_player_command("play", song_payload=payload, open_window=True, current_time=resume_time)
         return
 
     if current_song and is_playing:
@@ -173,7 +173,34 @@ def pause_action() -> None:
         payload = build_song_payload(st.session_state.get("current_song"))[0]
     
     log_debug_event("pause_action", current_song=st.session_state.get("current_song"), pause_time=pause_time)
-    queue_player_command("pause", song_payload=payload, current_time=pause_time)
+    queue_player_command("pause", song_payload=payload, open_window=True, current_time=pause_time)
+
+
+def stop_action() -> None:
+    current_song = st.session_state.get("current_song")
+    if not current_song:
+        st.warning("No song is currently selected for playback.")
+        log_debug_event("stop_action_no_song")
+        return
+
+    st.session_state["is_playing"] = False
+    st.session_state["current_time"] = 0.0
+    st.session_state["playback_started_at"] = None
+    st.session_state["audio_render_nonce"] = int(st.session_state.get("audio_render_nonce", 0)) + 1
+
+    payload = None
+    if current_song:
+        payload = build_song_payload(str(current_song))[0]
+
+    log_debug_event("stop_action", current_song=current_song)
+    queue_player_command("stop", song_payload=payload, open_window=True, current_time=0.0)
+
+
+def toggle_play_pause_action() -> None:
+    if bool(st.session_state.get("is_playing", False)):
+        pause_action()
+        return
+    play_action()
 
 
 def next_action() -> None:

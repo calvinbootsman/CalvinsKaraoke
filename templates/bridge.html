@@ -80,9 +80,12 @@ function publishCommand(payload) {
 function ensureCommandDelivery(payload, shouldOpen) {
     publishCommand(payload);
 
-    const existingPopup = ensurePopup();
-    if (existingPopup) {
-        dispatchToPopup(existingPopup, payload);
+    const popup = shouldOpen ? ensurePopup(payload) : ensurePopup();
+    if (popup) {
+        dispatchToPopup(popup, payload);
+        if (shouldOpen) {
+            popup.focus();
+        }
     }
 
     setTimeout(() => {
@@ -116,7 +119,7 @@ if (commandPayload && commandPayload.id) {
     } catch (error) {
     }
 
-    const shouldOpen = !!commandPayload.openWindow || commandPayload.command === 'load_and_play';
+    const shouldOpen = !!commandPayload.openWindow || ['load_and_play', 'play', 'pause', 'stop'].includes(commandPayload.command);
     const needsOpen = shouldOpen && !hasActivePlayerHeartbeat();
     if (needsOpen) {
         forceOpenAndDispatch(commandPayload);
