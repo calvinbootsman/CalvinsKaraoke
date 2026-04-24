@@ -58,6 +58,14 @@
             color: #cbd5e1;
             min-height: 130px;
         }
+        #pitchCanvas {
+            width: 100%;
+            height: 240px;
+            background: rgba(2, 6, 23, 0.7);
+            border-radius: 10px;
+            margin-top: 14px;
+            border: 1px solid rgba(100, 116, 139, 0.5);
+        }
         #lyrics {
             margin-top: 20px;
             max-height: 60vh;
@@ -90,7 +98,8 @@
             <span id="timeLabel">00:00</span>
             <span id="playbackState" class="state-paused">Paused</span>
         </div>
-        <div id="debug" style="display: DEBUG_ENABLED ? "block" : "none""></div>
+        <div id="debug" style="display: none;"></div>
+        <canvas id="pitchCanvas"></canvas>
         <div id="lyrics"></div>
     </div>
     <script>
@@ -105,7 +114,161 @@
         let heartbeatTimer = null;
         let lyricTicker = null;
         let debugLines = [];
+        const pitchCanvas = document.getElementById('pitchCanvas');
+        const pitchCtx = pitchCanvas.getContext('2d');
+        let pitchData = [];
+
+        function resizePitchCanvas() {
+            const containerWidth = pitchCanvas.parentElement.clientWidth - 36;
+            pitchCanvas.width = containerWidth;
+            pitchCanvas.height = 240;
+        }
+
+        function drawPitch(currentTime) {
+            if (!pitchData.length) return;
+            resizePitchCanvas();
+            const ctx = pitchCtx;
+            const width = pitchCanvas.width;
+            const height = pitchCanvas.height;
+
+            const offset = 50; // X offset for timeline
+
+            ctx.fillStyle = 'rgba(2, 6, 23, 0.7)';
+            ctx.fillRect(0, 0, width, height);
+
+            const viewStart = currentTime;
+            const viewEnd = currentTime + 10;
+            const pointsInView = pitchData.filter(d => d.time >= viewStart && d.time <= viewEnd);
+            if (pointsInView.length < 2) return;
+
+            const timeToX = (t) => offset + ((t - viewStart) / 10) * (width - offset);
+            const freqToY = (freq) => {
+                if (freq <= 0) return height;
+                const midi = 12 * (Math.log2(freq / 440)) + 69;
+                const normalized = Math.max(0, Math.min(1, (midi - 40) / 60));
+                return height - (normalized * height) - 10;
+            };
+
+            ctx.strokeStyle = 'rgba(100, 116, 139, 0.3)';
+            ctx.lineWidth = 1;
+
+            const noteInfo = [
+                { midi: 40, name: 'E2' }, { midi: 43, name: 'G2' }, { midi: 46, name: 'A#2' },
+                { midi: 48, name: 'C3' }, { midi: 50, name: 'D3' }, { midi: 53, name: 'F3' },
+                { midi: 55, name: 'G3' }, { midi: 58, name: 'A#3' }, { midi: 60, name: 'C4' },
+                { midi: 62, name: 'D4' }, { midi: 65, name: 'F4' }, { midi: 67, name: 'G4' },
+                { midi: 70, name: 'A#4' }, { midi: 72, name: 'C5' }, { midi: 75, name: 'D5' },
+                { midi: 79, name: 'F5' }, { midi: 83, name: 'G5' }
+            ];
+            const halfTheNotes = noteInfo.length / 2;
+            const everyOtherNote = noteInfo.filter((_, i) => i % 2 === 0);
+            for (const n of everyOtherNote) {
+                const freq = 440 * Math.pow(2, (n.midi - 69) / 12);
+                const y = freqToY(freq);
+                ctx.beginPath();
+                ctx.moveTo(10, y);
+                ctx.lineTo(width, y);
+                ctx.stroke();
+                ctx.fillStyle = 'rgba(148, 163, 184, 0.7)';
+                ctx.font = '10px Segoe UI, sans-serif';
+                ctx.textAlign = 'left';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(n.name, 8, y);
+            }
+
+            for (let sec = 0; sec <= 10; sec += 2) {
+                const x = timeToX(viewStart + sec);
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, height);
+                ctx.stroke();
+            }
+
+            ctx.strokeStyle = '#fde68a';
+            ctx.lineWidth = 2;
+            let inSegment = false;
+            for (let i = 0; i < pointsInView.length; i++) {
+                const d = pointsInView[i];
+                const x = timeToX(d.time);
+                const y = freqToY(d.frequency);
+                const isVoiced = d.frequency > 0;
+                if (isVoiced) {
+                    if (!inSegment) {
+                        ctx.beginPath();
+                        ctx.moveTo(x, y);
+                        inSegment = true;
+                    } else {
+                        ctx.lineTo(x, y);
+                    }
+                } else {
+                    if (inSegment) {
+                        ctx.stroke();
+                        inSegment = false;
+                    }
+                }
+            }
+            if (inSegment) ctx.stroke();
+
+            ctx.globalAlpha = 0.3;
+            ctx.lineWidth = 4;
+            let inHighlightSegment = false;
+            for (let i = 0; i < pointsInView.length; i++) {
+                const d = pointsInView[i];
+                const isVoicedAndConfident = d.frequency > 0 && d.confidence >= 0.5;
+                if (isVoicedAndConfident) {
+                    const x = timeToX(d.time);
+                    const y = freqToY(d.frequency);
+                    if (!inHighlightSegment) {
+                        ctx.beginPath();
+                        ctx.moveTo(x, y);
+                        inHighlightSegment = true;
+                    } else {
+                        ctx.lineTo(x, y);
+                    }
+                } else {
+                    if (inHighlightSegment) {
+                        ctx.stroke();
+                        inHighlightSegment = false;
+                    }
+                }
+            }
+            if (inHighlightSegment) ctx.stroke();
+            ctx.globalAlpha = 1;
+
+            ctx.strokeStyle = '#ef4444';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(offset, 0);
+            ctx.lineTo(offset, height);
+            ctx.stroke();
+        }
+
+        async function loadPitchData(pitchUrl) {
+            if (!pitchUrl) {
+                pitchData = [];
+                return;
+            }
+            try {
+                const response = await fetch(pitchUrl, { cache: 'no-store' });
+                if (!response.ok) return;
+                const csvText = await response.text();
+                const lines = csvText.trim().split('\n');
+                pitchData = lines.slice(1).map(line => {
+                    const [timeStr, freqStr, confStr] = line.split(',');
+                    return {
+                        time: parseFloat(timeStr) || 0,
+                        frequency: parseFloat(freqStr) || 0,
+                        confidence: parseFloat(confStr) || 0
+                    };
+                }).filter(d => !isNaN(d.time));
+            } catch (error) {
+                pitchData = [];
+            }
+        }
+
+
         const DEBUG_ENABLED = __DEBUG_ENABLED__;
+        debugEl.style.display = DEBUG_ENABLED ? 'block' : 'none';
         let commandChannel = null;
         const commandFeedPath = '/_karaoke_command.json';
         let timelineTime = 0;
@@ -152,6 +315,7 @@
             timelineTime = currentTime;
             timeLabelEl.textContent = formatTime(currentTime);
             highlightLyric(currentTime);
+            drawPitch(currentTime);
         }
 
         function writeDebug(message, meta = null) {
@@ -229,9 +393,12 @@
             titleEl.textContent = song.title || 'Unknown song';
             lyricRows = Array.isArray(song.lyrics) ? song.lyrics : [];
             renderLyrics();
+            if (song.pitchUrl) loadPitchData(song.pitchUrl);
+            else pitchData = [];
             writeDebug('applySong', {
                 title: song.title || null,
                 lyricCount: lyricRows.length,
+                hasPitch: !!song.pitchUrl
             });
         }
 
@@ -391,6 +558,7 @@
         fetchLatestCommand(lastCommandId + 1);
         setTimeout(() => fetchLatestCommand(lastCommandId + 1), 500);
         consumePersistedCommand();
+        window.addEventListener('resize', () => { resizePitchCanvas(); drawPitch(getTimelineTime()); });
         lyricTicker = setInterval(tickLyrics, 150);
         setTimeline(0, false);
         writeDebug('playerReady');

@@ -38,10 +38,17 @@ def build_song_payload(song_title: str) -> tuple[dict[str, object] | None, str |
     audio_url = f"{media_server_base_url}/{encoded_song_title}/no_vocals.mp3"
     lyrics = parse_lrc_file(song_dir / "song.lrc")
 
+    # Check for pitch data
+    pitch_path = song_dir / "extracted_f0.csv"
+    pitch_url = None
+    if pitch_path.exists():
+        pitch_url = f"{media_server_base_url}/{encoded_song_title}/extracted_f0.csv"
+
     return {
         "title": song_title,
         "audioUrl": audio_url,
         "lyrics": lyrics,
+        "pitchUrl": pitch_url,
     }, None
 
 
