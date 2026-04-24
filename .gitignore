@@ -3,3 +3,5 @@
 /Modelfile
 /__pycache__
 *.pyc
+/music
+/separated
