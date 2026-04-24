@@ -118,6 +118,130 @@
         const pitchCanvas = document.getElementById('pitchCanvas');
         const pitchCtx = pitchCanvas.getContext('2d');
         let pitchData = [];
+        const MIC_RMS_THRESHOLD = 0.005;
+        const MIN_PITCH_HZ = 65;
+        const MAX_PITCH_HZ = 1100;
+        const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+        const micState = {
+            initialized: false,
+            active: false,
+            volumeRms: 0,
+            frequencyHz: 0,
+            note: '',
+            stream: null,
+            audioContext: null,
+            analyser: null,
+            rafId: null,
+        };
+
+        function frequencyToNote(frequencyHz) {
+            const freq = Number(frequencyHz || 0);
+            if (!Number.isFinite(freq) || freq <= 0) return '';
+            const midi = Math.round(69 + 12 * Math.log2(freq / 440));
+            const octave = Math.floor(midi / 12) - 1;
+            const noteName = NOTE_NAMES[((midi % 12) + 12) % 12];
+            return `${noteName}${octave}`;
+        }
+
+        function autoCorrelatePitch(buffer, sampleRate) {
+            const length = buffer.length;
+            if (!length) return 0;
+
+            let rms = 0;
+            for (let i = 0; i < length; i += 1) {
+                const value = buffer[i];
+                rms += value * value;
+            }
+            rms = Math.sqrt(rms / length);
+            if (rms < MIC_RMS_THRESHOLD) {
+                return 0;
+            }
+
+            let bestOffset = -1;
+            let bestCorrelation = 0;
+            const maxSamples = Math.floor(length / 2);
+            for (let offset = 8; offset < maxSamples; offset += 1) {
+                let correlation = 0;
+                for (let i = 0; i < maxSamples; i += 1) {
+                    correlation += Math.abs(buffer[i] - buffer[i + offset]);
+                }
+                correlation = 1 - (correlation / maxSamples);
+                if (correlation > bestCorrelation) {
+                    bestCorrelation = correlation;
+                    bestOffset = offset;
+                }
+            }
+
+            if (bestOffset <= 0 || bestCorrelation < 0.88) {
+                return 0;
+            }
+
+            const frequency = sampleRate / bestOffset;
+            if (frequency < MIN_PITCH_HZ || frequency > MAX_PITCH_HZ) {
+                return 0;
+            }
+            return frequency;
+        }
+
+        async function initMicrophonePitchTracking() {
+            if (micState.initialized) return;
+            micState.initialized = true;
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                writeDebug('micUnsupported');
+                return;
+            }
+
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        echoCancellation: false,
+                        noiseSuppression: false,
+                        autoGainControl: false,
+                    }
+                });
+                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const source = audioContext.createMediaStreamSource(stream);
+                const analyser = audioContext.createAnalyser();
+                analyser.fftSize = 2048;
+                source.connect(analyser);
+
+                micState.active = true;
+                micState.stream = stream;
+                micState.audioContext = audioContext;
+                micState.analyser = analyser;
+
+                const timeDomain = new Float32Array(analyser.fftSize);
+
+                const tickMic = () => {
+                    if (!micState.active || !micState.analyser) return;
+                    micState.analyser.getFloatTimeDomainData(timeDomain);
+
+                    let rms = 0;
+                    for (let i = 0; i < timeDomain.length; i += 1) {
+                        const sample = timeDomain[i];
+                        rms += sample * sample;
+                    }
+                    rms = Math.sqrt(rms / timeDomain.length);
+                    micState.volumeRms = rms;
+
+                    const frequencyHz = autoCorrelatePitch(timeDomain, audioContext.sampleRate);
+                    if (frequencyHz > 0 && rms >= MIC_RMS_THRESHOLD) {
+                        micState.frequencyHz = frequencyHz;
+                        micState.note = frequencyToNote(frequencyHz);
+                    } else {
+                        micState.frequencyHz = 0;
+                        micState.note = '';
+                    }
+
+                    micState.rafId = window.requestAnimationFrame(tickMic);
+                };
+
+                tickMic();
+                writeDebug('micReady');
+            } catch (error) {
+                writeDebug('micInitFailed', { message: String(error) });
+            }
+        }
 
         function resizePitchCanvas() {
             const containerWidth = pitchCanvas.parentElement.clientWidth - 36;
@@ -242,6 +366,23 @@
             ctx.moveTo(offset, 0);
             ctx.lineTo(offset, height);
             ctx.stroke();
+
+            const micVisible = micState.active && micState.volumeRms >= MIC_RMS_THRESHOLD && micState.frequencyHz > 0;
+            if (micVisible) {
+                const micY = freqToY(micState.frequencyHz);
+                ctx.fillStyle = '#f8fafc';
+                ctx.beginPath();
+                ctx.arc(offset, micY, 4, 0, Math.PI * 2);
+                ctx.fill();
+
+                if (micState.note) {
+                    ctx.fillStyle = '#fca5a5';
+                    ctx.font = '11px Segoe UI, sans-serif';
+                    ctx.textAlign = 'left';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(micState.note, offset + 8, micY);
+                }
+            }
         }
 
         async function loadPitchData(pitchUrl) {
@@ -594,6 +735,7 @@
 
         updateHeartbeat();
         heartbeatTimer = setInterval(updateHeartbeat, 1500);
+        initMicrophonePitchTracking();
 
         window.addEventListener('storage', (event) => {
             if (event.key === playbackStateKey && event.newValue) {
@@ -628,6 +770,15 @@
             }
             if (commandChannel) {
                 commandChannel.close();
+            }
+            if (micState.rafId) {
+                cancelAnimationFrame(micState.rafId);
+            }
+            if (micState.stream) {
+                micState.stream.getTracks().forEach((track) => track.stop());
+            }
+            if (micState.audioContext) {
+                micState.audioContext.close();
             }
         });
 
