@@ -12,7 +12,8 @@ from core.file_utils import find_downloaded_audio, sanitize_title
 import librosa
 import numpy as np
 from scipy.signal import medfilt
-
+import pandas as pd
+import torchcrepe
 
 def get_song_title(url: str) -> str:
     ydl_opts = {
@@ -75,20 +76,66 @@ def get_lyrics(song_dir: Path, song_title: str) -> None:
     lrc_text = syncedlyrics.search(song_title)
     song_path.write_text(lrc_text or "", encoding="utf-8")
 
-def extract_audio(audio_path: Path, song_dir: Path):
-    y, sr = librosa.load(audio_path, sr=None, mono=True)
-    f0, voiced_flag, voiced_probs = librosa.pyin(y, 
-                                             fmin=librosa.note_to_hz('C2'), 
-                                             fmax=librosa.note_to_hz('C7'))
+def extract_audio_torchcrepe(audio_path: Path, song_dir: Path):
+    # 1. Load Audio (CREPE models expect exactly 16kHz)
+    y, sr = librosa.load(audio_path, sr=16000, mono=True)
     
-    times = librosa.times_like(f0, sr=sr)
-
-    smoothed_f0 = medfilt(f0, kernel_size=15)
-
-    midi_continuous = librosa.hz_to_midi(smoothed_f0)
-
-    midi_quantized = np.round(midi_continuous)
-    quantized_f0 = librosa.midi_to_hz(midi_quantized)
-
-    combined = np.column_stack((times, quantized_f0, voiced_probs))
-    np.savetxt(song_dir / "extracted_f0.csv", combined, delimiter=",", header="time,frequency,confidence", comments="")
+    # Convert numpy array to PyTorch tensor and add a batch dimension: shape (1, T)
+    audio_tensor = torch.tensor(y).unsqueeze(0)
+    
+    # Automatically use GPU if available, otherwise CPU
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    
+    # 2. Extract Pitch using Torchcrepe
+    # 10ms step size at 16kHz = 160 samples per hop
+    hop_length = int(16000 / 100) 
+    fmin = librosa.note_to_hz('E2')
+    fmax = librosa.note_to_hz('G5')
+    
+    # Torchcrepe uses Viterbi decoding by default to prevent octave drops
+    pitch, periodicity = torchcrepe.predict(
+        audio_tensor,
+        sample_rate=16000,
+        hop_length=hop_length,
+        fmin=fmin,
+        fmax=fmax,
+        model='full', # Use 'tiny' if 'full' is too slow
+        batch_size=2048,
+        device=device,
+        return_periodicity=True # This gives us the confidence score
+    )
+    
+    # Move tensors back to CPU, remove batch dimension, convert to numpy
+    f0 = pitch.squeeze().cpu().numpy()
+    confidence = periodicity.squeeze().cpu().numpy()
+    
+    # Generate time stamps
+    times = librosa.frames_to_time(np.arange(len(f0)), sr=16000, hop_length=hop_length)
+    
+    # 3. Filter out unvoiced frames based on confidence
+    confidence_threshold = 0.5 
+    f0_filtered = np.where(confidence > confidence_threshold, f0, np.nan)
+    
+    # 4. Safe Smoothing
+    f0_series = pd.Series(f0_filtered)
+    smoothed_f0 = f0_series.rolling(window=15, min_periods=1, center=True).median().values
+    
+    # 5. Safe Quantization
+    quantized_f0 = np.full_like(smoothed_f0, np.nan)
+    valid_idx = ~np.isnan(smoothed_f0) 
+    
+    if np.any(valid_idx):
+        midi_continuous = librosa.hz_to_midi(smoothed_f0[valid_idx])
+        midi_quantized = np.round(midi_continuous)
+        quantized_f0[valid_idx] = librosa.midi_to_hz(midi_quantized)
+    
+    # 6. Save Data
+    combined = np.column_stack((times, quantized_f0, confidence))
+    np.savetxt(
+        song_dir / "extracted_f0.csv", 
+        combined, 
+        delimiter=",", 
+        header="time,frequency,confidence", 
+        comments="",
+        fmt='%f' 
+    )
