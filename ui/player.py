@@ -148,8 +148,8 @@ def render_overview_player() -> None:
             <input type="range" id="seekBar" min="0" max="100" value="0" style="width: 100%; cursor: pointer; margin-bottom: 12px;">
             <span id="currentTimeDisplay" style="color: #cbd5e1; font-size: 0.9rem; display: block; margin-bottom: 12px;">00:00</span>
             
-            <audio id="instrumentalAudio" src="{instrumental_url}" preload="auto" style="display: none;"></audio>
-            {'<audio id="vocalsAudio" src="' + vocals_url + '" preload="auto" style="display: none;"></audio>' if vocals_url else ''}
+            <audio id="instrumentalAudio" src="{instrumental_url}" preload="auto" crossorigin="anonymous" style="display: none;"></audio>
+            {'<audio id="vocalsAudio" src="' + vocals_url + '" preload="auto" crossorigin="anonymous" style="display: none;"></audio>' if vocals_url else ''}
         </div>
         
         <script>
@@ -165,6 +165,47 @@ def render_overview_player() -> None:
             const playbackStateKey = 'karaoke-main-player-state';
             const commandKey = 'karaoke-streamlit-cmd';
             
+            function updateVolumeDisplay() {{
+                const instVol = instrumentalVol.value / 100;
+                const vocVol = vocalsAudio ? (vocalsVol.value / 100) : 0;
+                
+                if (audioCtx && instrumentalGain) {{
+                    instrumentalGain.gain.value = instVol;
+                    if (vocalsGain) vocalsGain.gain.value = vocVol;
+                }} else {{
+                    instrumentalAudio.volume = instVol;
+                    if (vocalsAudio) vocalsAudio.volume = vocVol;
+                }}
+                
+                instrumentalVolValue.textContent = instrumentalVol.value + '%';
+                if (vocalsAudio) vocalsVolValue.textContent = vocalsVol.value + '%';
+            }}
+
+            let audioCtx = null;
+            let instrumentalGain = null;
+            let vocalsGain = null;
+
+            function initWebAudio() {{
+                if (audioCtx) return;
+                try {{
+                    const AudioContext = window.AudioContext || window.webkitAudioContext;
+                    audioCtx = new AudioContext();
+
+                    const instSource = audioCtx.createMediaElementSource(instrumentalAudio);
+                    instrumentalGain = audioCtx.createGain();
+                    instSource.connect(instrumentalGain);
+                    instrumentalGain.connect(audioCtx.destination);
+
+                    if (vocalsAudio) {{
+                        const vocSource = audioCtx.createMediaElementSource(vocalsAudio);
+                        vocalsGain = audioCtx.createGain();
+                        vocSource.connect(vocalsGain);
+                        vocalsGain.connect(audioCtx.destination);
+                    }}
+                    updateVolumeDisplay(); 
+                }} catch (e) {{}}
+            }}
+
             let lastHandledActionNonce = 0;
             let lastHandledTimeNonce = 0;
             let isSeeking = false;
@@ -205,26 +246,30 @@ def render_overview_player() -> None:
                 seekBar.value = String(currentTime);
             }}
 
-            // --- THE INVISIBLE LISTENER ---
-            // This listens to the invisible Streamlit component for Play/Pause/Stop clicks
+            function triggerPlay() {{
+                initWebAudio();
+                if (audioCtx && audioCtx.state === 'suspended') {{
+                    audioCtx.resume();
+                }}
+                instrumentalAudio.play().catch(e => console.warn("Autoplay blocked. Need interaction inside iframe.", e));
+                if (vocalsAudio) vocalsAudio.play().catch(e => {{}});
+            }}
+
             window.addEventListener('storage', (e) => {{
                 if (e.key === commandKey && e.newValue) {{
                     try {{
                         const cmd = JSON.parse(e.newValue);
                         
-                        // 1. Check if Streamlit forced a time jump (Stop button)
                         if (cmd.time_nonce > lastHandledTimeNonce) {{
                             lastHandledTimeNonce = cmd.time_nonce;
                             instrumentalAudio.currentTime = cmd.time;
                             if (vocalsAudio) vocalsAudio.currentTime = cmd.time;
                         }}
                         
-                        // 2. Check if Streamlit pressed Play/Pause
                         if (cmd.action_nonce > lastHandledActionNonce) {{
                             lastHandledActionNonce = cmd.action_nonce;
                             if (cmd.is_playing) {{
-                                instrumentalAudio.play().catch(err => console.log("Browser requires a click on the page first", err));
-                                if (vocalsAudio) vocalsAudio.play().catch(()=>{{}});
+                                triggerPlay();
                             }} else {{
                                 instrumentalAudio.pause();
                                 if (vocalsAudio) vocalsAudio.pause();
@@ -234,7 +279,6 @@ def render_overview_player() -> None:
                 }}
             }});
 
-            // Load initial state on page boot
             try {{
                 const bootCmdRaw = localStorage.getItem(commandKey);
                 if (bootCmdRaw) {{
@@ -243,8 +287,7 @@ def render_overview_player() -> None:
                     lastHandledTimeNonce = bootCmd.time_nonce;
                     instrumentalAudio.currentTime = bootCmd.time;
                     if (bootCmd.is_playing) {{
-                        instrumentalAudio.play().catch(e=>{{}});
-                        if (vocalsAudio) vocalsAudio.play().catch(e=>{{}});
+                        triggerPlay();
                     }}
                 }}
             }} catch(e) {{}}
@@ -263,6 +306,13 @@ def render_overview_player() -> None:
                 updateTimeDisplay();
                 pushStateToPopup(instrumentalAudio.currentTime);
                 postToBridge('sync', instrumentalAudio.currentTime, false);
+                
+                if (vocalsAudio) {{
+                    const drift = Math.abs(vocalsAudio.currentTime - instrumentalAudio.currentTime);
+                    if (drift > 0.1) {{
+                        vocalsAudio.currentTime = instrumentalAudio.currentTime;
+                    }}
+                }}
             }});
 
             instrumentalAudio.addEventListener('play', () => {{
@@ -274,22 +324,19 @@ def render_overview_player() -> None:
                 pushStateToPopup(instrumentalAudio.currentTime);
                 postToBridge('pause', instrumentalAudio.currentTime, true);
             }});
-
-            const updateVolumeDisplay = function() {{
-                instrumentalAudio.volume = instrumentalVol.value / 100;
-                instrumentalVolValue.textContent = instrumentalVol.value + '%';
-                if (vocalsAudio) {{
-                    vocalsAudio.volume = vocalsVol.value / 100;
-                    vocalsVolValue.textContent = vocalsVol.value + '%';
-                }}
-            }};
-            instrumentalVol.addEventListener('input', updateVolumeDisplay);
-            if (vocalsAudio) vocalsVol.addEventListener('input', updateVolumeDisplay);
+            
+            instrumentalVol.addEventListener('input', () => {{
+                initWebAudio(); 
+                updateVolumeDisplay();
+            }});
+            if (vocalsAudio) vocalsVol.addEventListener('input', () => {{
+                initWebAudio();
+                updateVolumeDisplay();
+            }});
             updateVolumeDisplay();
 
         </script>
         '''
-        
         st.iframe(player_html, height=200)
 
         # 2. THE INVISIBLE COMMAND INJECTOR

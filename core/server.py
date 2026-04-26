@@ -10,6 +10,11 @@ _SERVER_LOCK = threading.Lock()
 
 
 class QuietMediaRequestHandler(SimpleHTTPRequestHandler):
+    def end_headers(self) -> None:
+        # NEW: Inject the CORS header so Web Audio API can read the files!
+        self.send_header('Access-Control-Allow-Origin', '*')
+        super().end_headers()
+
     def log_message(self, format: str, *args: object) -> None:
         del format, args
 
@@ -34,3 +39,5 @@ def ensure_media_server() -> str:
             _MEDIA_SERVER_THREAD.start()
 
     return f"http://127.0.0.1:{_MEDIA_SERVER.server_port}"
+
+
