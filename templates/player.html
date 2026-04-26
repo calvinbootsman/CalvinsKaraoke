@@ -103,6 +103,8 @@
         <div id="lyrics"></div>
     </div>
     <script>
+        __SHARED_LYRICS_JS__
+
         const titleEl = document.getElementById('songTitle');
         const lyricsEl = document.getElementById('lyrics');
         const debugEl = document.getElementById('debug');
@@ -110,7 +112,14 @@
         const playbackStateEl = document.getElementById('playbackState');
         let lyricRows = [];
         let currentSongTitle = null;
-        let activeIndex = -1;
+        const lyricWindow = window.createKaraokeLyricWindow({
+            lyricsEl,
+            visibleLines: 6,
+            lineClassName: 'line',
+            activeClassName: 'active',
+            emptyMessage: 'No synced lyrics found for this song.',
+            smoothScroll: true,
+        });
         let lastCommandId = 0;
         let heartbeatTimer = null;
         let lyricTicker = null;
@@ -457,7 +466,7 @@
             const currentTime = getTimelineTime();
             timelineTime = currentTime;
             timeLabelEl.textContent = formatTime(currentTime);
-            highlightLyric(currentTime);
+            lyricWindow.highlight(currentTime);
             drawPitch(currentTime);
         }
 
@@ -481,62 +490,12 @@
             debugEl.textContent = `Debug\n${debugLines.join('\n')}\n\nPlaybackState: ${JSON.stringify(now)}`;
         }
 
-        function renderLyrics(startIndex = 0, count = 6) {
-            lyricsEl.innerHTML = '';
-            const endIndex = Math.min(startIndex + count, lyricRows.length);
-            for (let i = startIndex; i < endIndex; i++) {
-                const row = lyricRows[i];
-                const div = document.createElement('div');
-                div.className = 'line';
-                div.textContent = row.text;
-                div.dataset.index = i;
-                lyricsEl.appendChild(div);
-            }
-            activeIndex = -1;
-        }
-
-        function highlightLyric(currentTime) {
-            if (!lyricRows.length) return;
-            let index = -1;
-            for (let i = 0; i < lyricRows.length; i += 1) {
-                if (currentTime >= lyricRows[i].time) {
-                    index = i;
-                } else {
-                    break;
-                }
-            }
-
-            if (index === activeIndex) return;
-
-            // Calculate visible window: 6 lines with current line as the second
-            let startIndex = Math.max(0, index - 1);
-            // If first line hasn't been sung yet (index < 1), start from 0
-            if (index < 1) {
-                startIndex = 0;
-            }
-            
-            // Re-render with the new window
-            renderLyrics(startIndex, 6);
-            
-            // Now update the active class on the re-rendered elements
-            const children = lyricsEl.children;
-            if (activeIndex >= 0 && activeIndex >= startIndex && activeIndex < startIndex + 6) {
-                children[activeIndex - startIndex].classList.remove('active');
-            }
-
-            if (index >= 0 && index >= startIndex && index < startIndex + 6) {
-                children[index - startIndex].classList.add('active');
-                children[index - startIndex].scrollIntoView({ behavior: 'smooth', block: 'center' });
-            }
-            activeIndex = index;
-        }
-
         function applySong(song) {
             if (!song) return;
             titleEl.textContent = song.title || 'Unknown song';
             currentSongTitle = song.title || null;
             lyricRows = Array.isArray(song.lyrics) ? song.lyrics : [];
-            renderLyrics();
+            lyricWindow.setRows(lyricRows);
             if (song.pitchUrl) loadPitchData(song.pitchUrl);
             else pitchData = [];
             writeDebug('applySong', {

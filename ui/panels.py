@@ -1,14 +1,20 @@
+import json
 import importlib
 import time
+from pathlib import Path
+from urllib.parse import quote
 
 import streamlit as st
 from st_keyup import st_keyup
 
-from core.file_utils import list_available_files
+from core.file_utils import find_downloaded_audio, list_available_files, parse_lrc_file
 from core.playback import add_song_to_queue, move_queue_item
+from core.server import ensure_media_server
 from config import DEBUG_ENABLED
 
 sort_items = getattr(importlib.import_module("streamlit_sortables"), "sort_items")
+TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
+SHARED_LYRICS_JS = (TEMPLATES_DIR / "shared_lyrics.js").read_text(encoding="utf-8")
 
 
 def render_live_search_input() -> str:
@@ -35,6 +41,91 @@ def show_fading_success(message: str, duration_seconds: int = 5) -> None:
 def show_fading_info(message: str, duration_seconds: int = 5) -> None:
     del duration_seconds
     st.toast(message)
+
+
+def _build_song_preview_html(song_title: str, audio_url: str, lyrics: list[dict[str, float | str]]) -> str:
+    lyrics_json = json.dumps([
+        {
+            "time": float(line.get("time", 0.0)),
+            "text": str(line.get("text", "")),
+        }
+        for line in lyrics
+    ])
+
+    return f'''
+    <div style="background: rgba(15, 23, 42, 0.82); border: 1px solid rgba(148, 163, 184, 0.32); border-radius: 12px; padding: 14px; margin-top: 10px; font-family: 'Source Sans Pro', 'Segoe UI', sans-serif;">
+        <div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+            <div style="min-width: 0;">
+                <div style="color: #e5e7eb; font-size: 0.95rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{song_title}</div>
+                <div style="color: #94a3b8; font-size: 0.8rem;">Original audio preview and synced lyrics</div>
+            </div>
+            <div id="previewTime" style="color: #cbd5e1; font-size: 0.88rem; font-variant-numeric: tabular-nums;">00:00</div>
+        </div>
+
+        <audio id="previewAudio" src="{audio_url}" controls preload="metadata" style="width: 100%; margin-bottom: 12px;"></audio>
+
+        <div id="previewLyrics" style="max-height: 13.5em; overflow: hidden; border: 1px solid rgba(100, 116, 139, 0.35); border-radius: 10px; background: rgba(2, 6, 23, 0.7); padding: 12px;"></div>
+    </div>
+
+    <style>
+        .line {{
+            opacity: 0.45;
+            transition: all 0.2s ease;
+            margin: 3px 0;
+            font-size: 1rem;
+            line-height: 1.45;
+            color: #cbd5e1;
+        }}
+        .line.active {{
+            opacity: 1;
+            color: #fde68a;
+            transform: translateX(4px);
+            font-weight: 700;
+        }}
+    </style>
+
+    <script>
+        {SHARED_LYRICS_JS}
+
+        const audioEl = document.getElementById('previewAudio');
+        const lyricsEl = document.getElementById('previewLyrics');
+        const timeEl = document.getElementById('previewTime');
+        const lyricRows = {lyrics_json};
+        const lyricWindow = window.createKaraokeLyricWindow({{
+            lyricsEl,
+            visibleLines: 6,
+            lineClassName: 'line',
+            activeClassName: 'active',
+            emptyMessage: 'No synced lyrics found for this song.',
+            smoothScroll: false,
+        }});
+
+        function formatTime(seconds) {{
+            const total = Math.max(0, Math.floor(Number(seconds || 0)));
+            const minutes = Math.floor(total / 60);
+            const secs = total % 60;
+            return String(minutes).padStart(2, '0') + ':' + String(secs).padStart(2, '0');
+        }}
+
+        audioEl.addEventListener('timeupdate', () => {{
+            timeEl.textContent = formatTime(audioEl.currentTime);
+            lyricWindow.highlight(audioEl.currentTime);
+        }});
+
+        audioEl.addEventListener('loadedmetadata', () => {{
+            timeEl.textContent = formatTime(audioEl.currentTime);
+            lyricWindow.setRows(lyricRows);
+            lyricWindow.highlight(audioEl.currentTime);
+        }});
+
+        audioEl.addEventListener('play', () => {{
+            lyricWindow.highlight(audioEl.currentTime);
+        }});
+
+        lyricWindow.setRows(lyricRows);
+        lyricWindow.highlight(audioEl.currentTime || 0);
+    </script>
+    '''
 
 
 def render_debug_panel() -> None:
@@ -147,12 +238,26 @@ def render_saved_music_panel(filtered_songs: list) -> None:
         st.caption("Tip: try fewer words or a rough spelling.")
         return
 
+    media_server_base_url = ensure_media_server()
+
     for song_dir in filtered_songs:
         available_files = list_available_files(song_dir)
         col_expand, col_add = st.columns([0.75, 0.25])
         with col_expand:
             with st.container():
                 with st.expander(song_dir.name):
+                    original_audio = find_downloaded_audio(song_dir)
+                    lyrics = parse_lrc_file(song_dir / "song.lrc")
+                    if original_audio is not None:
+                        encoded_song_title = quote(song_dir.name, safe="")
+                        audio_url = f"{media_server_base_url}/{encoded_song_title}/{quote(original_audio.name, safe='')}"
+                        st.iframe(
+                            _build_song_preview_html(song_dir.name, audio_url, lyrics),
+                            height=360,
+                        )
+                    else:
+                        st.caption("No original audio file found yet.")
+
                     if available_files:
                         st.write("Available files:")
                         for file_name in available_files:

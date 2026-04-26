@@ -21,6 +21,7 @@ def render_player_bridge() -> None:
     player_url = f"{media_server_base_url}/_karaoke_player.html"
 
     player_html = _read_template("player.html")
+    shared_lyrics_js = _read_template("shared_lyrics.js")
 
     command_file = MUSIC_DIR / "_karaoke_command.json"
     command_file_payload = command_payload if isinstance(command_payload, dict) else {}
@@ -35,6 +36,7 @@ def render_player_bridge() -> None:
 
     player_file = MUSIC_DIR / "_karaoke_player.html"
     player_html = player_html.replace("__DEBUG_ENABLED__", str(DEBUG_ENABLED).lower())
+    player_html = player_html.replace("__SHARED_LYRICS_JS__", shared_lyrics_js)
     player_file.write_text(player_html, encoding="utf-8")
 
     bridge_file = MUSIC_DIR / "_karaoke_bridge.html"
