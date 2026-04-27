@@ -3,13 +3,16 @@ import importlib
 import time
 from pathlib import Path
 from urllib.parse import quote
+import threading
 
 import streamlit as st
+from streamlit.runtime.scriptrunner import add_script_run_ctx
 from st_keyup import st_keyup
 
 from core.file_utils import *
 from core.playback import add_song_to_queue, move_queue_item
 from core.server import ensure_media_server
+from core.processing import separate_audio_into_stems, extract_audio_torchcrepe, get_lyrics
 from config import DEBUG_ENABLED
 
 sort_items = getattr(importlib.import_module("streamlit_sortables"), "sort_items")
@@ -355,12 +358,68 @@ def render_saved_music_panel(filtered_songs: list) -> None:
                     else:
                         st.caption("No original audio file found yet.")
 
-                    if available_files:
-                        st.write("Available files:")
-                        for file_name in available_files:
-                            st.write(f"- {file_name}")
-                    else:
-                        st.write("No generated files found yet.")
+                    st.write("File Status & Regeneration:")
+                    
+                    has_stems = (song_dir / "vocals.mp3").exists() and (song_dir / "no_vocals.mp3").exists()
+                    has_pitch = (song_dir / "pitch.csv").exists()
+                    has_lyrics = (song_dir / "song.lrc").exists()
+                    
+                    c1, c2 = st.columns([0.7, 0.3])
+                    c1.write(f"- stems (vocals/no_vocals): {'✅' if has_stems else '❌ missing'}")
+                    if not has_stems and original_audio:
+                        if c2.button("Reprocess", key=f"reprocess-stems-{song_dir.name}"):
+                            if "bg_tasks" not in st.session_state: st.session_state.bg_tasks = {}
+                            tid = f"{song_dir.name} (stems)"
+                            st.session_state.bg_tasks[tid] = {"state": "running", "msg": "Separating audio..."}
+                            def worker_stems(audio_file, s_dir, task_id):
+                                try:
+                                    separate_audio_into_stems(audio_file, s_dir)
+                                    st.session_state.bg_tasks[task_id]["state"] = "done"
+                                except Exception as e:
+                                    st.session_state.bg_tasks[task_id]["state"] = "error"
+                                    st.session_state.bg_tasks[task_id]["msg"] = str(e)
+                            t = threading.Thread(target=worker_stems, args=(original_audio, song_dir, tid))
+                            add_script_run_ctx(t)
+                            t.start()
+                            st.rerun()
+
+                    c1, c2 = st.columns([0.7, 0.3])
+                    c1.write(f"- pitch.csv: {'✅' if has_pitch else '❌ missing'}")
+                    if not has_pitch and original_audio:
+                        if c2.button("Reprocess", key=f"reprocess-pitch-{song_dir.name}"):
+                            if "bg_tasks" not in st.session_state: st.session_state.bg_tasks = {}
+                            tid = f"{song_dir.name} (pitch)"
+                            st.session_state.bg_tasks[tid] = {"state": "running", "msg": "Extracting pitch..."}
+                            def worker_pitch(audio_file, s_dir, task_id):
+                                try:
+                                    extract_audio_torchcrepe(audio_file, s_dir)
+                                    st.session_state.bg_tasks[task_id]["state"] = "done"
+                                except Exception as e:
+                                    st.session_state.bg_tasks[task_id]["state"] = "error"
+                                    st.session_state.bg_tasks[task_id]["msg"] = str(e)
+                            t = threading.Thread(target=worker_pitch, args=(original_audio, song_dir, tid))
+                            add_script_run_ctx(t)
+                            t.start()
+                            st.rerun()
+
+                    c1, c2 = st.columns([0.7, 0.3])
+                    c1.write(f"- song.lrc: {'✅' if has_lyrics else '❌ missing'}")
+                    if not has_lyrics:
+                        if c2.button("Reprocess", key=f"reprocess-lyrics-{song_dir.name}"):
+                            if "bg_tasks" not in st.session_state: st.session_state.bg_tasks = {}
+                            tid = f"{song_dir.name} (lyrics)"
+                            st.session_state.bg_tasks[tid] = {"state": "running", "msg": "Fetching lyrics..."}
+                            def worker_lyrics(s_dir, task_id):
+                                try:
+                                    get_lyrics(s_dir, s_dir.name)
+                                    st.session_state.bg_tasks[task_id]["state"] = "done"
+                                except Exception as e:
+                                    st.session_state.bg_tasks[task_id]["state"] = "error"
+                                    st.session_state.bg_tasks[task_id]["msg"] = str(e)
+                            t = threading.Thread(target=worker_lyrics, args=(song_dir, tid))
+                            add_script_run_ctx(t)
+                            t.start()
+                            st.rerun()
         with col_add:
             if st.button("Add to queue", key=f"add-{song_dir.name}"):
                 add_song_to_queue(song_dir.name)

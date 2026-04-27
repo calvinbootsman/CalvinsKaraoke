@@ -132,7 +132,7 @@ def extract_audio_torchcrepe(audio_path: Path, song_dir: Path):
     # 6. Save Data
     combined = np.column_stack((times, quantized_f0, confidence))
     np.savetxt(
-        song_dir / "extracted_f0.csv", 
+        song_dir / "pitch.csv", 
         combined, 
         delimiter=",", 
         header="time,frequency,confidence", 
