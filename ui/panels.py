@@ -282,7 +282,16 @@ def render_saved_music_panel(filtered_songs: list) -> None:
                     
                     c1, c2 = st.columns([0.7, 0.3])
                     c1.write(f"- stems (vocals/no_vocals): {'✅' if has_stems else '❌ missing'}")
-                    if not has_stems and original_audio:
+                    
+                    tid_stems = f"{song_dir.name} (stems)"
+                    task_stems = st.session_state.get("bg_tasks", {}).get(tid_stems)
+                    
+                    if task_stems and task_stems["state"] == "running":
+                        c2.progress(max(0.0, min(1.0, float(task_stems.get("progress", 0.0)))), text=task_stems.get("msg", "Processing..."))
+                    elif task_stems and task_stems["state"] == "error":
+                        c2.error(f"Failed: {task_stems.get('msg', 'Error')}")
+                        
+                    if not has_stems and original_audio and (not task_stems or task_stems["state"] != "running"):
                         if c2.button("Reprocess", key=f"reprocess-stems-{song_dir.name}"):
                             if "bg_tasks" not in st.session_state: st.session_state.bg_tasks = {}
                             tid = f"{song_dir.name} (stems)"
@@ -306,7 +315,16 @@ def render_saved_music_panel(filtered_songs: list) -> None:
 
                     c1, c2 = st.columns([0.7, 0.3])
                     c1.write(f"- pitch.csv: {'✅' if has_pitch else '❌ missing'}")
-                    if not has_pitch and original_audio:
+                    
+                    tid_pitch = f"{song_dir.name} (pitch)"
+                    task_pitch = st.session_state.get("bg_tasks", {}).get(tid_pitch)
+                    
+                    if task_pitch and task_pitch["state"] == "running":
+                        c2.progress(max(0.0, min(1.0, float(task_pitch.get("progress", 0.0)))), text=task_pitch.get("msg", "Processing..."))
+                    elif task_pitch and task_pitch["state"] == "error":
+                        c2.error(f"Failed: {task_pitch.get('msg', 'Error')}")
+
+                    if not has_pitch and original_audio and (not task_pitch or task_pitch["state"] != "running"):
                         if c2.button("Reprocess", key=f"reprocess-pitch-{song_dir.name}"):
                             if "bg_tasks" not in st.session_state: st.session_state.bg_tasks = {}
                             tid = f"{song_dir.name} (pitch)"
@@ -318,7 +336,9 @@ def render_saved_music_panel(filtered_songs: list) -> None:
                                         if progress is not None:
                                             st.session_state.bg_tasks[task_id]["progress"] = progress
                                 try:
-                                    extract_audio_torchcrepe(audio_file, s_dir, progress_cb=cb)
+                                    vocals_path = s_dir / "vocals.mp3"
+                                    print(f"Worker pitch: audio_file={audio_file}, vocals_path={vocals_path}, s_dir={s_dir}")
+                                    extract_audio_torchcrepe(vocals_path, s_dir, progress_cb=cb)
                                     st.session_state.bg_tasks[task_id]["state"] = "done"
                                 except Exception as e:
                                     st.session_state.bg_tasks[task_id]["state"] = "error"
@@ -330,7 +350,16 @@ def render_saved_music_panel(filtered_songs: list) -> None:
 
                     c1, c2 = st.columns([0.7, 0.3])
                     c1.write(f"- song.lrc: {'✅' if has_lyrics else '❌ missing'}")
-                    if not has_lyrics:
+                    
+                    tid_lyrics = f"{song_dir.name} (lyrics)"
+                    task_lyrics = st.session_state.get("bg_tasks", {}).get(tid_lyrics)
+
+                    if task_lyrics and task_lyrics["state"] == "running":
+                        c2.progress(max(0.0, min(1.0, float(task_lyrics.get("progress", 0.0)))), text=task_lyrics.get("msg", "Processing..."))
+                    elif task_lyrics and task_lyrics["state"] == "error":
+                        c2.error(f"Failed: {task_lyrics.get('msg', 'Error')}")
+
+                    if not has_lyrics and (not task_lyrics or task_lyrics["state"] != "running"):
                         if c2.button("Reprocess", key=f"reprocess-lyrics-{song_dir.name}"):
                             if "bg_tasks" not in st.session_state: st.session_state.bg_tasks = {}
                             tid = f"{song_dir.name} (lyrics)"
@@ -349,3 +378,8 @@ def render_saved_music_panel(filtered_songs: list) -> None:
         with col_add:
             if st.button("Add to queue", key=f"add-{song_dir.name}"):
                 add_song_to_queue(song_dir.name)
+
+    has_running_tasks = any(t.get("state") == "running" for t in st.session_state.get("bg_tasks", {}).values())
+    if has_running_tasks:
+        time.sleep(1)
+        st.rerun()

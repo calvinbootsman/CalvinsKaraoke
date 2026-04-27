@@ -144,6 +144,11 @@ def render_overview_player() -> None:
                     <input type="range" id="vocalsVol" min="0" max="100" value="{vocals_vol_default}" style="width: 100%;">
                     <span id="vocalsVolValue" style="color: #a1a1aa; font-size: 0.85rem;">{vocals_vol_default}%</span>
                 </div>
+                <div style="flex: 1;">
+                    <label style="display: block; color: #cbd5e1; font-size: 0.85rem; margin-bottom: 4px;">Tick Threshold</label>
+                    <input type="range" id="confidenceVol" min="0" max="100" value="50" style="width: 100%;">
+                    <span id="confidenceVolValue" style="color: #a1a1aa; font-size: 0.85rem;">50%</span>
+                </div>
             </div>
             <input type="range" id="seekBar" min="0" max="100" value="0" style="width: 100%; cursor: pointer; margin-bottom: 12px;">
             <span id="currentTimeDisplay" style="color: #cbd5e1; font-size: 0.9rem; display: block; margin-bottom: 12px;">00:00</span>
@@ -159,6 +164,8 @@ def render_overview_player() -> None:
             const currentTimeDisplay = document.getElementById('currentTimeDisplay');
             const instrumentalVol = document.getElementById('instrumentalVol');
             const vocalsVol = document.getElementById('vocalsVol');
+            const confidenceVol = document.getElementById('confidenceVol');
+            const confidenceVolValue = document.getElementById('confidenceVolValue');
             
             const songTitle = {json.dumps(song_title)};
             const songPayload = {song_payload_json};
@@ -215,7 +222,8 @@ def render_overview_player() -> None:
                 const now = Date.now();
                 if (!force && (now - lastBridgeSyncSentAt) < 250) return;
                 lastBridgeSyncSentAt = now;
-                const payload = {{ command, song: songPayload, currentTime: Math.max(0, Number(timeSeconds || 0)), isPlaying: !instrumentalAudio.paused, ts: now }};
+                const confThreshold = confidenceVol ? (confidenceVol.value / 100) : 0.5;
+                const payload = {{ command, song: songPayload, currentTime: Math.max(0, Number(timeSeconds || 0)), isPlaying: !instrumentalAudio.paused, ts: now, confidenceThreshold: confThreshold }};
                 try {{
                     if (!window.parent || !window.parent.document) return;
                     const iframes = window.parent.document.querySelectorAll('iframe');
@@ -230,8 +238,9 @@ def render_overview_player() -> None:
 
             function pushStateToPopup(timeSeconds) {{
                 try {{
+                    const confThreshold = confidenceVol ? (confidenceVol.value / 100) : 0.5;
                     localStorage.setItem(playbackStateKey, JSON.stringify({{
-                        songTitle, currentTime: Math.max(0, Number(timeSeconds || 0)), isPlaying: !instrumentalAudio.paused, ts: Date.now()
+                        songTitle, currentTime: Math.max(0, Number(timeSeconds || 0)), isPlaying: !instrumentalAudio.paused, ts: Date.now(), confidenceThreshold: confThreshold
                     }}));
                 }} catch (error) {{}}
             }}
@@ -332,6 +341,11 @@ def render_overview_player() -> None:
             if (vocalsAudio) vocalsVol.addEventListener('input', () => {{
                 initWebAudio();
                 updateVolumeDisplay();
+            }});
+            if (confidenceVol) confidenceVol.addEventListener('input', () => {{
+                confidenceVolValue.textContent = confidenceVol.value + '%';
+                pushStateToPopup(instrumentalAudio.currentTime);
+                postToBridge('sync_conf', instrumentalAudio.currentTime, true);
             }});
             updateVolumeDisplay();
 
