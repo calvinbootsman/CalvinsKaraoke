@@ -11,21 +11,73 @@ _SERVER_LOCK = threading.Lock()
 
 class QuietMediaRequestHandler(SimpleHTTPRequestHandler):
     def end_headers(self) -> None:
-        # NEW: Inject the CORS header so Web Audio API can read the files!
+        # Inject the CORS header so Web Audio API can read the files!
         self.send_header('Access-Control-Allow-Origin', '*')
         super().end_headers()
 
-    def log_message(self, format: str, *args: object) -> None:
-        del format, args
+    def send_head(self):
+        import os
+        path = self.translate_path(self.path)
+        f = None
+        try:
+            f = open(path, 'rb')
+        except OSError:
+            self.send_error(404, "File not found")
+            return None
+            
+        ctype = self.guess_type(path)
+        fs = os.fstat(f.fileno())
+        size = int(fs.st_size)
+        
+        range_header = self.headers.get("Range", "")
+        if range_header.startswith("bytes="):
+            ranges = range_header.replace("bytes=", "").split("-")
+            start = int(ranges[0]) if ranges[0] else 0
+            end = int(ranges[1]) if len(ranges) > 1 and ranges[1] else size - 1
+            length = end - start + 1
 
-    def log_error(self, format: str, *args: object) -> None:
-        del format, args
+            self.send_response(206)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+            self.send_header("Content-Length", str(length))
+            self.send_header("Last-Modified", self.date_time_string(fs.st_mtime))
+            self.end_headers()
+            
+            f.seek(start)
+            self.range_limit = length
+            return f
+
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(size))
+        self.send_header("Last-Modified", self.date_time_string(fs.st_mtime))
+        self.end_headers()
+        self.range_limit = size
+        return f
 
     def copyfile(self, source, outputfile) -> None:
         try:
-            super().copyfile(source, outputfile)
-        except (BrokenPipeError, ConnectionResetError):
+            if hasattr(self, 'range_limit'):
+                left = self.range_limit
+                while left > 0:
+                    chunk_size = min(64 * 1024, left)
+                    buf = source.read(chunk_size)
+                    if not buf:
+                        break
+                    outputfile.write(buf)
+                    left -= len(buf)
+            else:
+                super().copyfile(source, outputfile)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             pass
+
+    def log_message(self, format: str, *args: object) -> None:
+        pass
+
+    def log_error(self, format: str, *args: object) -> None:
+        pass
 
 
 def ensure_media_server() -> str:

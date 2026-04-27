@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: transparent;
+            overflow: hidden; /* Let Streamlit handle scrolling if needed, but we resize */
+        }
+        .line {
+            opacity: 0.45;
+            transition: all 0.2s ease;
+            margin: 3px 0;
+            font-size: 1rem;
+            line-height: 1.45;
+            color: #cbd5e1;
+        }
+        .line.active {
+            opacity: 1;
+            color: #fde68a;
+            transform: translateX(4px);
+            font-weight: 700;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="wrapper" style="background: rgba(15, 23, 42, 0.82); border: 1px solid rgba(148, 163, 184, 0.32); border-radius: 12px; padding: 14px; margin-top: 10px; font-family: 'Source Sans Pro', 'Segoe UI', sans-serif; display: flex; flex-direction: column;">
+        <div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+            <div style="min-width: 0;">
+                <div id="songTitle" style="color: #e5e7eb; font-size: 0.95rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"></div>
+                <div style="color: #94a3b8; font-size: 0.8rem;">Original audio preview and synced lyrics</div>
+            </div>
+            <div id="previewTime" style="color: #cbd5e1; font-size: 0.88rem; font-variant-numeric: tabular-nums;">00:00</div>
+        </div>
+
+        <audio id="previewAudio" controls preload="metadata" style="width: 100%; margin-bottom: 12px; min-height: 54px;"></audio>
+
+        <div id="previewLyrics" style="height: 13.5em; overflow: hidden; border: 1px solid rgba(100, 116, 139, 0.35); border-radius: 10px; background: rgba(2, 6, 23, 0.7); padding: 12px;"></div>
+    </div>
+
+    <script>
+        // Inline shared_lyrics.js logic
+        window.createKaraokeLyricWindow = function createKaraokeLyricWindow(options) {
+            const lyricsEl = options.lyricsEl;
+            const visibleLines = Number(options.visibleLines || 6);
+            const activeClassName = String(options.activeClassName || 'active');
+            const lineClassName = String(options.lineClassName || 'line');
+            const emptyMessage = String(options.emptyMessage || 'No synced lyrics found.');
+            const smoothScroll = options.smoothScroll !== false;
+
+            let lyricRows = [];
+            let activeIndex = -1;
+
+            function renderRows(startIndex) {
+                lyricsEl.innerHTML = '';
+                const endIndex = Math.min(startIndex + visibleLines, lyricRows.length);
+                for (let i = startIndex; i < endIndex; i += 1) {
+                    const row = lyricRows[i];
+                    const line = document.createElement('div');
+                    line.className = lineClassName;
+                    line.textContent = String(row.text || '');
+                    line.dataset.index = String(i);
+                    lyricsEl.appendChild(line);
+                }
+            }
+
+            function setRows(rows) {
+                lyricRows = Array.isArray(rows) ? rows : [];
+                activeIndex = -1;
+                if (!lyricRows.length) {
+                    lyricsEl.innerHTML = `<div style="color:#94a3b8; font-size:0.92rem; line-height:1.6;">${emptyMessage}</div>`;
+                    return;
+                }
+                renderRows(0);
+            }
+
+            function highlight(currentTime) {
+                if (!lyricRows.length) return;
+
+                let index = -1;
+                for (let i = 0; i < lyricRows.length; i += 1) {
+                    if (Number(currentTime || 0) >= Number(lyricRows[i].time || 0)) {
+                        index = i;
+                    } else {
+                        break;
+                    }
+                }
+
+                if (index === activeIndex) return;
+
+                const maxStart = Math.max(0, lyricRows.length - visibleLines);
+                const startIndex = index <= 0 ? 0 : Math.min(Math.max(0, index - 1), maxStart);
+                renderRows(startIndex);
+
+                const children = lyricsEl.children;
+                const activeChildIndex = index - startIndex;
+                if (activeChildIndex >= 0 && activeChildIndex < children.length) {
+                    children[activeChildIndex].classList.add(activeClassName);
+                    if (smoothScroll) {
+                        children[activeChildIndex].scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    }
+                }
+
+                activeIndex = index;
+            }
+
+            return {
+                setRows,
+                highlight,
+            };
+        };
+
+        // Streamlit Component Logic
+        const audioEl = document.getElementById('previewAudio');
+        const lyricsEl = document.getElementById('previewLyrics');
+        const timeEl = document.getElementById('previewTime');
+        const titleEl = document.getElementById('songTitle');
+        const wrapperEl = document.getElementById('wrapper');
+
+        let lyricWindow = null;
+        let initialized = false;
+        let currentAudioUrl = null;
+
+        function formatTime(seconds) {
+            const total = Math.max(0, Math.floor(Number(seconds || 0)));
+            const minutes = Math.floor(total / 60);
+            const secs = total % 60;
+            return String(minutes).padStart(2, '0') + ':' + String(secs).padStart(2, '0');
+        }
+
+        function initLyricWindow() {
+            lyricWindow = window.createKaraokeLyricWindow({
+                lyricsEl,
+                visibleLines: 6,
+                lineClassName: 'line',
+                activeClassName: 'active',
+                emptyMessage: 'No synced lyrics found for this song.',
+                smoothScroll: false,
+            });
+
+            audioEl.addEventListener('timeupdate', () => {
+                timeEl.textContent = formatTime(audioEl.currentTime);
+                if (lyricWindow) {
+                    lyricWindow.highlight(audioEl.currentTime);
+                }
+            });
+
+            audioEl.addEventListener('loadedmetadata', () => {
+                timeEl.textContent = formatTime(audioEl.currentTime);
+                if (lyricWindow) {
+                    lyricWindow.highlight(audioEl.currentTime);
+                }
+                sendFrameHeight();
+            });
+
+            audioEl.addEventListener('play', () => {
+                if (lyricWindow) lyricWindow.highlight(audioEl.currentTime);
+            });
+            return true;
+        }
+
+        function sendFrameHeight() {
+            const desiredHeight = wrapperEl ? wrapperEl.offsetHeight + 30 : document.body.scrollHeight + 30;
+            window.parent.postMessage({
+                isStreamlitMessage: true,
+                type: "streamlit:setFrameHeight",
+                height: desiredHeight
+            }, "*");
+        }
+
+        window.addEventListener("message", (event) => {
+            if (event.data.type === "streamlit:render") {
+                const args = event.data.args;
+                
+                if (!initialized) {
+                    initialized = initLyricWindow();
+                }
+                
+                titleEl.textContent = args.song_title || "";
+                
+                // Track url manually to avoid browser normalization issues
+                if (args.audio_url && currentAudioUrl !== args.audio_url) {
+                    const wasPlaying = !audioEl.paused;
+                    currentAudioUrl = args.audio_url;
+                    audioEl.src = args.audio_url;
+                    if (wasPlaying) {
+                        audioEl.play().catch(e => console.log(e));
+                    }
+                }
+
+                if (lyricWindow && args.lyrics) {
+                    lyricWindow.setRows(args.lyrics);
+                    // Update highlight based on current time
+                    lyricWindow.highlight(audioEl.currentTime || 0);
+                }
+
+                sendFrameHeight();
+            }
+        });
+
+        // Announce we are ready
+        window.parent.postMessage({
+            isStreamlitMessage: true,
+            type: "streamlit:componentReady",
+            apiVersion: 1
+        }, "*");
+
+        const resizeObserver = new ResizeObserver(() => sendFrameHeight());
+        resizeObserver.observe(wrapperEl);
+        resizeObserver.observe(document.body);
+    </script>
+</body>
+</html>
