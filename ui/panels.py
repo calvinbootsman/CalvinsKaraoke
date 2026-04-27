@@ -372,8 +372,13 @@ def render_saved_music_panel(filtered_songs: list) -> None:
                             tid = f"{song_dir.name} (stems)"
                             st.session_state.bg_tasks[tid] = {"state": "running", "msg": "Separating audio..."}
                             def worker_stems(audio_file, s_dir, task_id):
+                                def cb(msg: str, progress: float | None = None):
+                                    if task_id in st.session_state.bg_tasks:
+                                        st.session_state.bg_tasks[task_id]["msg"] = msg
+                                        if progress is not None:
+                                            st.session_state.bg_tasks[task_id]["progress"] = progress
                                 try:
-                                    separate_audio_into_stems(audio_file, s_dir)
+                                    separate_audio_into_stems(audio_file, s_dir, progress_cb=cb)
                                     st.session_state.bg_tasks[task_id]["state"] = "done"
                                 except Exception as e:
                                     st.session_state.bg_tasks[task_id]["state"] = "error"
@@ -391,8 +396,13 @@ def render_saved_music_panel(filtered_songs: list) -> None:
                             tid = f"{song_dir.name} (pitch)"
                             st.session_state.bg_tasks[tid] = {"state": "running", "msg": "Extracting pitch..."}
                             def worker_pitch(audio_file, s_dir, task_id):
+                                def cb(msg: str, progress: float | None = None):
+                                    if task_id in st.session_state.bg_tasks:
+                                        st.session_state.bg_tasks[task_id]["msg"] = msg
+                                        if progress is not None:
+                                            st.session_state.bg_tasks[task_id]["progress"] = progress
                                 try:
-                                    extract_audio_torchcrepe(audio_file, s_dir)
+                                    extract_audio_torchcrepe(audio_file, s_dir, progress_cb=cb)
                                     st.session_state.bg_tasks[task_id]["state"] = "done"
                                 except Exception as e:
                                     st.session_state.bg_tasks[task_id]["state"] = "error"

@@ -1,5 +1,9 @@
 import shutil
+import subprocess
+import sys
+import re
 from pathlib import Path
+from typing import Callable, Optional
 
 import demucs.separate
 from libs.syncedlyrics.syncedlyrics import search
@@ -26,13 +30,25 @@ def get_song_title(url: str) -> str:
     return sanitize_title(info.get("title", "Unknown title"))
 
 
-def download_audio(url: str, song_dir: Path) -> Path:
+def download_audio(url: str, song_dir: Path, progress_cb: Optional[Callable[[str, Optional[float]], None]] = None) -> Path:
+    def hook(d):
+        if progress_cb and d['status'] == 'downloading':
+            try:
+                downloaded = d.get('downloaded_bytes', 0)
+                total = d.get('total_bytes') or d.get('total_bytes_estimate', 0)
+                if total > 0:
+                    pct = downloaded / total
+                    progress_cb(f"Downloading... {d.get('_percent_str', '').strip()}", pct)
+            except Exception:
+                pass
+
     ydl_opts = {
         "format": "bestaudio/best",
         "outtmpl": str(song_dir / "source.%(ext)s"),
         "noplaylist": True,
         "quiet": True,
         "no_warnings": True,
+        "progress_hooks": [hook] if progress_cb else [],
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -44,9 +60,12 @@ def download_audio(url: str, song_dir: Path) -> Path:
     return downloaded_audio
 
 
-def separate_audio_into_stems(audio_path: Path, song_dir: Path) -> None:
+def separate_audio_into_stems(audio_path: Path, song_dir: Path, progress_cb: Optional[Callable[[str, Optional[float]], None]] = None) -> None:
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    demucs.separate.main([
+    cmd = [
+        sys.executable,
+        "-m",
+        "demucs.separate",
         "--device",
         device,
         "--mp3",
@@ -55,7 +74,42 @@ def separate_audio_into_stems(audio_path: Path, song_dir: Path) -> None:
         "-n",
         DEMUX_MODEL,
         str(audio_path),
-    ])
+    ]
+
+    if progress_cb:
+        progress_cb("Starting stem separation...", 0.0)
+
+    process = subprocess.Popen(cmd, stderr=subprocess.PIPE, text=True, encoding="utf-8")
+    if process.stderr:
+        expected_passes = 1
+        current_pass = 0
+        last_pct = 0.0
+
+        for line in process.stderr:
+            if progress_cb:
+                m_bag = re.search(r'bag of (\d+) models', line)
+                if m_bag:
+                    expected_passes = int(m_bag.group(1))
+
+                match = re.search(r'(\d+)%', line)
+                if match:
+                    pct = int(match.group(1)) / 100.0
+
+                    if pct < last_pct and last_pct > 0.8:
+                        current_pass += 1
+                    last_pct = pct
+
+                    actual_expected = max(expected_passes, current_pass + 1)
+                    overall_progress = min(1.0, (current_pass + pct) / actual_expected)
+
+                    progress_cb(
+                        f"Separating stems (pass {current_pass+1}/{actual_expected})... {match.group(1)}%",
+                        overall_progress
+                    )
+
+    process.wait()
+    if process.returncode != 0:
+        raise RuntimeError(f"Demucs process failed with return code {process.returncode}")
 
     demucs_song_dir = DEMUX_OUTPUT_ROOT / audio_path.stem
     vocals_src = demucs_song_dir / "vocals.mp3"
@@ -76,7 +130,9 @@ def get_lyrics(song_dir: Path, song_title: str) -> None:
     lrc_text = search(song_title)
     song_path.write_text(lrc_text or "", encoding="utf-8")
 
-def extract_audio_torchcrepe(audio_path: Path, song_dir: Path):
+def extract_audio_torchcrepe(audio_path: Path, song_dir: Path, progress_cb: Optional[Callable[[str, Optional[float]], None]] = None):
+    if progress_cb:
+        progress_cb("Loading audio (CREPE models)...", 0.05)
     # 1. Load Audio (CREPE models expect exactly 16kHz)
     y, sr = librosa.load(audio_path, sr=16000, mono=True)
     
@@ -86,6 +142,8 @@ def extract_audio_torchcrepe(audio_path: Path, song_dir: Path):
     # Automatically use GPU if available, otherwise CPU
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
+    if progress_cb:
+        progress_cb("Extracting pitch using torchcrepe...", 0.3)
     # 2. Extract Pitch using Torchcrepe
     # 10ms step size at 16kHz = 160 samples per hop
     hop_length = int(16000 / 100) 
@@ -105,6 +163,9 @@ def extract_audio_torchcrepe(audio_path: Path, song_dir: Path):
         return_periodicity=True # This gives us the confidence score
     )
     
+    # Generator chunks for memory and progress? For now, we just pass since predicting takes the bulk, 
+    # but since it's viterbi decoding it doesn't give a callback easily. We just output a mid-point task update.
+    
     # Move tensors back to CPU, remove batch dimension, convert to numpy
     f0 = pitch.squeeze().cpu().numpy()
     confidence = periodicity.squeeze().cpu().numpy()
@@ -112,15 +173,21 @@ def extract_audio_torchcrepe(audio_path: Path, song_dir: Path):
     # Generate time stamps
     times = librosa.frames_to_time(np.arange(len(f0)), sr=16000, hop_length=hop_length)
     
+    if progress_cb:
+        progress_cb("Filtering unvoiced frames...", 0.8)
     # 3. Filter out unvoiced frames based on confidence
     confidence_threshold = 0.5 
     f0_filtered = np.where(confidence > confidence_threshold, f0, np.nan)
     
+    if progress_cb:
+        progress_cb("Applying safe smoothing...", 0.85)
     # 4. Safe Smoothing
     f0_series = pd.Series(f0_filtered)
     smoothed_f0 = f0_series.rolling(window=15, min_periods=1, center=True).median().values
     
     # 5. Safe Quantization
+    if progress_cb:
+        progress_cb("Applying safe quantization...", 0.90)
     quantized_f0 = np.full_like(smoothed_f0, np.nan)
     valid_idx = ~np.isnan(smoothed_f0) 
     
@@ -130,6 +197,8 @@ def extract_audio_torchcrepe(audio_path: Path, song_dir: Path):
         quantized_f0[valid_idx] = librosa.midi_to_hz(midi_quantized)
     
     # 6. Save Data
+    if progress_cb:
+        progress_cb("Saving pitch data...", 0.95)
     combined = np.column_stack((times, quantized_f0, confidence))
     np.savetxt(
         song_dir / "pitch.csv", 

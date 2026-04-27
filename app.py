@@ -49,8 +49,14 @@ def render_progress_panel():
     for title, task in st.session_state.bg_tasks.items():
         state = task.get("state")
         msg = task.get("msg")
+        progress = task.get("progress")
         if state == "running":
-            st.info(f"⏳ **Processing '{title}'**: {msg}")
+            if progress is not None and getattr(st, 'progress', None) is not None:
+                # Streamlit progress expects a float between 0.0 and 1.0 (or int between 0 and 100)
+                safe_progress = max(0.0, min(1.0, float(progress)))
+                st.progress(safe_progress, text=f"⏳ **Processing '{title}'**: {msg}")
+            else:
+                st.info(f"⏳ **Processing '{title}'**: {msg}")
         elif state == "done":
             show_fading_success(f"Finished processing {title}")
             to_remove.append(title)
@@ -83,6 +89,13 @@ with main_col:
         else:
             def process_song_background(url):
                 title_for_task = "Initializing..."
+                
+                def prog_cb(msg: str, progress: float | None = None):
+                    if title_for_task in st.session_state.bg_tasks:
+                        st.session_state.bg_tasks[title_for_task]["msg"] = msg
+                        if progress is not None:
+                            st.session_state.bg_tasks[title_for_task]["progress"] = progress
+
                 try:
                     song_title = get_song_title(url)
                     title_for_task = song_title
@@ -94,7 +107,7 @@ with main_col:
                     audio_path = find_downloaded_audio(song_dir)
                     if audio_path is None:
                         st.session_state.bg_tasks[song_title]["msg"] = "Downloading audio..."
-                        audio_path = download_audio(url, song_dir)
+                        audio_path = download_audio(url, song_dir, progress_cb=prog_cb)
                     else:
                         st.session_state.bg_tasks[song_title]["msg"] = "Audio exists, validating..."
 
@@ -102,12 +115,12 @@ with main_col:
                     no_vocals_path = song_dir / "no_vocals.mp3"
                     if not vocals_path.exists() or not no_vocals_path.exists():
                         st.session_state.bg_tasks[song_title]["msg"] = "Separating audio into stems (vocals and instrumental)..."
-                        separate_audio_into_stems(audio_path, song_dir)
+                        separate_audio_into_stems(audio_path, song_dir, progress_cb=prog_cb)
 
                     notes_path = song_dir / "pitch.csv"
                     if not notes_path.exists():
                         st.session_state.bg_tasks[song_title]["msg"] = "Extracting pitch (this may take a bit)..."
-                        extract_audio_torchcrepe(audio_path, song_dir)
+                        extract_audio_torchcrepe(audio_path, song_dir, progress_cb=prog_cb)
 
                     if not (song_dir / "song.lrc").exists():
                         st.session_state.bg_tasks[song_title]["msg"] = "Fetching lyrics..."
