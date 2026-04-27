@@ -2,7 +2,7 @@ import shutil
 from pathlib import Path
 
 import demucs.separate
-import syncedlyrics
+from libs.syncedlyrics.syncedlyrics import search
 import torch
 import yt_dlp
 
@@ -73,7 +73,7 @@ def get_lyrics(song_dir: Path, song_title: str) -> None:
     if song_path.exists():
         return
 
-    lrc_text = syncedlyrics.search(song_title)
+    lrc_text = search(song_title)
     song_path.write_text(lrc_text or "", encoding="utf-8")
 
 def extract_audio_torchcrepe(audio_path: Path, song_dir: Path):

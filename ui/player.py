@@ -360,11 +360,11 @@ def render_overview_player() -> None:
     elif queue:
         st.caption("Press Play to start the first song in queue.")    
         
-    with st.expander("🔍 Server State Debugger", expanded=True):
-        st.json({
-            "action_nonce": st.session_state.get("action_nonce", 0),
-            "time_override_nonce": st.session_state.get("time_override_nonce", 0),
-            "is_playing": st.session_state.get("is_playing", False),
-            "last_action_ts": st.session_state.get("last_action_ts", 0),
-            "current_song": str(current_song) if current_song else None
-        })
+    # with st.expander("🔍 Server State Debugger", expanded=True):
+    #     st.json({
+    #         "action_nonce": st.session_state.get("action_nonce", 0),
+    #         "time_override_nonce": st.session_state.get("time_override_nonce", 0),
+    #         "is_playing": st.session_state.get("is_playing", False),
+    #         "last_action_ts": st.session_state.get("last_action_ts", 0),
+    #         "current_song": str(current_song) if current_song else None
+    #     })

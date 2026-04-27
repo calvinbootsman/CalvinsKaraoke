@@ -2,6 +2,7 @@ import re
 from difflib import SequenceMatcher
 from pathlib import Path
 
+from libs.syncedlyrics.syncedlyrics import search
 from config import VALID_AUDIO_EXTENSIONS
 
 
@@ -102,3 +103,49 @@ def parse_lrc_file(lrc_path: Path) -> list[dict[str, float | str]]:
             parsed.append({"time": total_seconds, "text": lyric})
 
     return sorted(parsed, key=lambda item: float(item["time"]))
+
+
+def search_alternative_lyrics(song_title: str) -> list[str]:
+    """Search for alternative synchronized lyrics using syncedlyrics library.
+    
+    Returns a list of LRC formatted strings found.
+    """
+    lrc_list = []
+    providers_to_check = ["Musixmatch", "Lrclib", "NetEase", "Megalobiz"]
+    print(f"Searching for alternative lyrics for '{song_title}'...")
+    try:
+        for provider in providers_to_check:
+            try:
+                print('trying provider', provider)
+                lrc = search(song_title, providers=[provider])
+                if lrc:
+                    lrc_list.append(lrc)
+            except Exception:
+                continue
+        print(f"Found {len(lrc_list)} alternative lyrics for '{song_title}'.")
+        return lrc_list
+    except Exception:
+        print(f"Error occurred while searching for alternative lyrics for '{song_title}'.")
+        return []
+
+
+def apply_offset_to_lrc(lrc_text: str, offset_seconds: float) -> str:
+    if offset_seconds == 0.0 or not lrc_text:
+        return lrc_text
+        
+    def shift_time(match):
+        mins = int(match.group(1))
+        secs = float(match.group(2))
+        total_secs = (mins * 60) + secs + offset_seconds
+        
+        # Prevent negative timestamps if the user pushes it too far early
+        if total_secs < 0:
+            total_secs = 0.0 
+            
+        new_mins = int(total_secs // 60)
+        new_secs = total_secs % 60
+        # Format back to [mm:ss.xx]
+        return f"[{new_mins:02d}:{new_secs:05.2f}]"
+        
+    # Matches standard LRC time tags like [01:23.45] or [01:23]
+    return re.sub(r"\[(\d{2,}):(\d{2}(?:\.\d+)?)\]", shift_time, lrc_text)

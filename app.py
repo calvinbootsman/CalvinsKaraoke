@@ -9,7 +9,7 @@ from core.file_utils import (
 )
 from core.playback import get_effective_current_time
 from core.playback import next_action
-from core.processing import download_audio, get_lyrics, get_song_title, separate_audio_into_stems
+from core.processing import download_audio, get_lyrics, get_song_title, separate_audio_into_stems, extract_audio_torchcrepe
 from state.playback import sync_playback_with_queue
 from state.session import (
     hydrate_session_from_runtime_state,
@@ -75,11 +75,20 @@ with main_col:
                 else:
                     show_fading_info("Stems already exist. Skipping separation.")
 
+                notes_path = song_dir / "extracted_f0.csv"
+                if not notes_path.exists():
+                    extract_audio_torchcrepe(audio_path, song_dir)
+                    show_fading_success("Audio processed with TorchCrepe for pitch extraction.")
+                else:
+                    show_fading_info("TorchCrepe output already exists. Skipping pitch extraction.")
+
                 if not (song_dir / "song.lrc").exists():
                     get_lyrics(song_dir, song_title)
                     show_fading_success("Lyrics saved.")
                 else:
                     show_fading_info("Lyrics already exist. Skipping lyrics fetch.")
+                
+
             except Exception as error:
                 st.error(f"Processing failed: {error}")
 

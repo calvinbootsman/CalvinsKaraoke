@@ -7,7 +7,7 @@ from urllib.parse import quote
 import streamlit as st
 from st_keyup import st_keyup
 
-from core.file_utils import find_downloaded_audio, list_available_files, parse_lrc_file
+from core.file_utils import *
 from core.playback import add_song_to_queue, move_queue_item
 from core.server import ensure_media_server
 from config import DEBUG_ENABLED
@@ -15,6 +15,27 @@ from config import DEBUG_ENABLED
 sort_items = getattr(importlib.import_module("streamlit_sortables"), "sort_items")
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 SHARED_LYRICS_JS = (TEMPLATES_DIR / "shared_lyrics.js").read_text(encoding="utf-8")
+
+
+def parse_lrc_file_from_text(lrc_text: str) -> list[dict[str, float | str]]:
+    """Parse LRC format text from a string."""
+    import re
+    
+    if not lrc_text:
+        return []
+
+    parsed: list[dict[str, float | str]] = []
+    for raw_line in lrc_text.splitlines():
+        matches = re.findall(r"\[(\d+):(\d+(?:\.\d+)?)\]", raw_line)
+        lyric = re.sub(r"\[(\d+):(\d+(?:\.\d+)?)\]", "", raw_line).strip()
+        if not matches or not lyric:
+            continue
+
+        for minute_text, second_text in matches:
+            total_seconds = (int(minute_text) * 60) + float(second_text)
+            parsed.append({"time": total_seconds, "text": lyric})
+
+    return sorted(parsed, key=lambda item: float(item["time"]))
 
 
 def render_live_search_input() -> str:
@@ -231,7 +252,6 @@ def render_queue_panel() -> None:
                 show_fading_success(f"Removed '{song_title}' from the queue.")
                 st.rerun()
 
-
 def render_saved_music_panel(filtered_songs: list) -> None:
     if not filtered_songs:
         show_fading_info("No songs matched your search.")
@@ -247,12 +267,89 @@ def render_saved_music_panel(filtered_songs: list) -> None:
             with st.container():
                 with st.expander(song_dir.name):
                     original_audio = find_downloaded_audio(song_dir)
-                    lyrics = parse_lrc_file(song_dir / "song.lrc")
+                    song_path = song_dir / "song.lrc"
+                    
+                    # Initialize session state for alternative lyrics
+                    session_key_alt_lyrics = f"alt_lyrics_{song_dir.name}"
+                    session_key_selected_lyrics = f"selected_lyrics_{song_dir.name}"
+                    
+                    if session_key_alt_lyrics not in st.session_state:
+                        st.session_state[session_key_alt_lyrics] = []
+                    if session_key_selected_lyrics not in st.session_state:
+                        st.session_state[session_key_selected_lyrics] = "Current (song.lrc)"
+                    
+                    search_query = st.text_input(
+                        "Edit song title for search:",
+                        value=song_dir.name,
+                        key=f"search-title-input-{song_dir.name}"
+                    )
+
+                    search_col1, search_col2 = st.columns([0.5, 0.5])
+                    with search_col1:
+                        if st.button("🔍 Search alternative lyrics", key=f"search-lyrics-{song_dir.name}"):
+                            with st.spinner("Searching for alternative lyrics..."):
+                                alt_lyrics_found = search_alternative_lyrics(search_query)
+                                st.session_state[session_key_alt_lyrics] = alt_lyrics_found
+                                show_fading_success(f"Found {len(alt_lyrics_found)} alternative lyric(s).")
+                    
+                    with search_col2:
+                        if st.session_state[session_key_alt_lyrics]:
+                            st.caption(f"✓ {len(st.session_state[session_key_alt_lyrics])} found")
+                    
+                    # Dropdown to select which lyrics to display
+                    if st.session_state[session_key_alt_lyrics]:
+                        options = ["Current (song.lrc)"] + [f"Alternative #{i+1}" for i in range(len(st.session_state[session_key_alt_lyrics]))]
+                        selected_option = st.selectbox(
+                            "Select lyrics to preview:",
+                            options,
+                            index=0,
+                            key=f"lyric-select-{song_dir.name}"
+                        )
+                        st.session_state[session_key_selected_lyrics] = selected_option
+                    else:
+                        selected_option = "Current (song.lrc)"
+
+                    # --- NEW OFFSET & PARSING LOGIC ---
+                    
+                    # 1. Fetch the raw text of the selected lyric
+                    if selected_option == "Current (song.lrc)":
+                        raw_lrc_text = song_path.read_text(encoding="utf-8") if song_path.exists() else ""
+                    else:
+                        alt_index = int(selected_option.split("#")[1]) - 1
+                        raw_lrc_text = st.session_state[session_key_alt_lyrics][alt_index]
+
+                    # 2. Render the offset bar (slider)
+                    lyric_offset = st.slider(
+                        "⏱️ Lyrics Offset (seconds): negative pulls lyrics earlier, positive pushes them later",
+                        min_value=-30.0, 
+                        max_value=30.0, 
+                        value=0.0, 
+                        step=0.5,
+                        key=f"offset-{song_dir.name}"
+                    )
+
+                    # 3. Apply the time shift to the raw text
+                    adjusted_lrc_text = apply_offset_to_lrc(raw_lrc_text, lyric_offset)
+                    
+                    # 4. Parse the shifted text for the live preview
+                    display_lyrics = parse_lrc_file_from_text(adjusted_lrc_text)
+
+                    # 5. Show save button if changing lyrics OR changing the offset
+                    if selected_option != "Current (song.lrc)" or lyric_offset != 0.0:
+                        if st.button("💾 Save as Current Lyrics", key=f"save-lyric-{song_dir.name}", type="primary"):
+                            song_path.write_text(adjusted_lrc_text or "", encoding="utf-8")
+                            show_fading_success("Lyrics saved successfully!")
+                            
+                            st.session_state[session_key_alt_lyrics] = []
+                            st.session_state[session_key_selected_lyrics] = "Current (song.lrc)"
+                            st.rerun()
+                    # ----------------------------------
+                    
                     if original_audio is not None:
                         encoded_song_title = quote(song_dir.name, safe="")
                         audio_url = f"{media_server_base_url}/{encoded_song_title}/{quote(original_audio.name, safe='')}"
                         st.iframe(
-                            _build_song_preview_html(song_dir.name, audio_url, lyrics),
+                            _build_song_preview_html(song_dir.name, audio_url, display_lyrics),
                             height=360,
                         )
                     else:
