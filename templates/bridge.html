@@ -173,6 +173,7 @@ function buildBridgeForwardPayload(mainPayload) {
         openWindow: false,
         currentTime: Math.max(0, Number(mainPayload.currentTime || 0)),
         isPlaying: !!mainPayload.isPlaying,
+        confidenceThreshold: mainPayload.confidenceThreshold,
     };
 }
 

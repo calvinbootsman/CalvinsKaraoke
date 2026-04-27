@@ -112,6 +112,7 @@
         const timeLabelEl = document.getElementById('timeLabel');
         const playbackStateEl = document.getElementById('playbackState');
         let lyricRows = [];
+        let currentConfidenceThreshold = 0.5;
         let currentSongTitle = null;
         const lyricWindow = window.createKaraokeLyricWindow({
             lyricsEl,
@@ -326,7 +327,7 @@
                 const d = pointsInView[i];
                 const x = timeToX(d.time);
                 const y = freqToY(d.frequency);
-                const isVoiced = d.frequency > 0;
+                const isVoiced = d.frequency > 0 && d.confidence >= currentConfidenceThreshold;
                 if (isVoiced) {
                     if (!inSegment) {
                         ctx.beginPath();
@@ -343,32 +344,6 @@
                 }
             }
             if (inSegment) ctx.stroke();
-
-            ctx.globalAlpha = 0.3;
-            ctx.lineWidth = 4;
-            let inHighlightSegment = false;
-            for (let i = 0; i < pointsInView.length; i++) {
-                const d = pointsInView[i];
-                const isVoicedAndConfident = d.frequency > 0 && d.confidence >= 0.5;
-                if (isVoicedAndConfident) {
-                    const x = timeToX(d.time);
-                    const y = freqToY(d.frequency);
-                    if (!inHighlightSegment) {
-                        ctx.beginPath();
-                        ctx.moveTo(x, y);
-                        inHighlightSegment = true;
-                    } else {
-                        ctx.lineTo(x, y);
-                    }
-                } else {
-                    if (inHighlightSegment) {
-                        ctx.stroke();
-                        inHighlightSegment = false;
-                    }
-                }
-            }
-            if (inHighlightSegment) ctx.stroke();
-            ctx.globalAlpha = 1;
 
             ctx.strokeStyle = '#ef4444';
             ctx.lineWidth = 2;
@@ -511,6 +486,10 @@
             if (!payload || !payload.command) return;
             writeDebug('handleCommand', { id: payload.id, command: payload.command, song: payload.song?.title || null });
 
+            if (payload.confidenceThreshold !== undefined) {
+                currentConfidenceThreshold = Number(payload.confidenceThreshold);
+            }
+
             if (payload.command === 'load_and_play') {
                 applySong(payload.song);
                 setTimeline(payload.currentTime ?? 0, true);
@@ -589,6 +568,10 @@
                 const parsed = JSON.parse(raw);
                 if (!parsed || !parsed.songTitle || !Number.isFinite(Number(parsed.currentTime))) return;
                 if (currentSongTitle && parsed.songTitle !== currentSongTitle) return;
+
+                if (parsed.confidenceThreshold !== undefined) {
+                    currentConfidenceThreshold = Number(parsed.confidenceThreshold);
+                }
 
                 const targetTime = Math.max(0, Number(parsed.currentTime || 0));
                 const targetPlaying = !!parsed.isPlaying;

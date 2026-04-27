@@ -120,7 +120,7 @@ with main_col:
                     notes_path = song_dir / "pitch.csv"
                     if not notes_path.exists():
                         st.session_state.bg_tasks[song_title]["msg"] = "Extracting pitch (this may take a bit)..."
-                        extract_audio_torchcrepe(audio_path, song_dir, progress_cb=prog_cb)
+                        extract_audio_torchcrepe(vocals_path, song_dir, progress_cb=prog_cb)
 
                     if not (song_dir / "song.lrc").exists():
                         st.session_state.bg_tasks[song_title]["msg"] = "Fetching lyrics..."
