@@ -195,11 +195,31 @@ def render_saved_music_panel(filtered_songs: list) -> None:
                     if session_key_selected_lyrics not in st.session_state:
                         st.session_state[session_key_selected_lyrics] = "Current (song.lrc)"
                     
-                    search_query = st.text_input(
-                        "Edit song title for search:",
-                        value=song_dir.name,
-                        key=f"search-title-input-{song_dir.name}"
-                    )
+                    t_col1, t_col2 = st.columns([0.7, 0.3])
+                    with t_col1:
+                        search_query = st.text_input(
+                            "Edit song title:",
+                            value=song_dir.name,
+                            key=f"search-title-input-{song_dir.name}"
+                        )
+                    with t_col2:
+                        st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
+                        if search_query and search_query != song_dir.name:
+                            if st.button("💾 Save Title", key=f"save-title-{song_dir.name}", use_container_width=True):
+                                new_dir = song_dir.parent / search_query.strip()
+                                if new_dir.exists():
+                                    st.error("Already exists")
+                                else:
+                                    try:
+                                        song_dir.rename(new_dir)
+                                        # Reset lyric state for the new directory name just in case
+                                        if session_key_alt_lyrics in st.session_state:
+                                            del st.session_state[session_key_alt_lyrics]
+                                        show_fading_success("Song title updated! 🎉")
+                                        time.sleep(0.5)
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"Failed to rename directory: {e}")
 
                     search_col1, search_col2 = st.columns([0.5, 0.5])
                     with search_col1:
