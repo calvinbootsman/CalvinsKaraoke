@@ -1,0 +1,12 @@
+streamlit
+yt-dlp
+demucs
+syncedlyrics
+torch
+torchcrepe
+librosa
+scipy
+numpy
+matplotlib
+st-keyup
+streamlit-sortables

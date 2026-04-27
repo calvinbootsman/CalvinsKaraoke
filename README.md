@@ -1,82 +1,70 @@
-# Calvin's Karaoke
+# 🎤 Calvin's Karaoke
 
-Calvin's Karaoke is a web application that allows you to sing your favourite songs with karaoke tracks. It uses AI to remove vocals from songs and provides a seamless karaoke experience. Find your song on Youtube, add it to the queue, and start singing! This works for songs that don't have a karaoke track available, or if you just want to sing along to your favourite songs. 
+Welcome to **Calvin's Karaoke**! This is a web app I built that lets you sing your favorite songs, even if an official karaoke track doesn't exist. 
 
-Built with Streamlit, Calvin's Karaoke downloads your requested songs, separates vocals using AI (Demucs), extracts pitch data (Torchcrepe), and fetches synchronized lyrics to create a complete, interactive karaoke player complete with a dual-window UI and responsive controls.
+Just find a song on YouTube, add it to your queue, and let the app do the rest. It uses AI to magically strip away the vocals, grabs the synchronized lyrics, and gives you a real-time pitch monitor so you can see if you're actually hitting the notes!
 
 ---
 
-## 🎵 Features
+## ✨ What makes it cool?
+
 ![Singing interface](images/pop_up_window.png)
-* **YouTube Ingestion:** Simply paste a YouTube URL to download the audio track.
-* **AI Stem Separation:** Uses Demucs (MDX Extra model) to automatically remove vocals and provide a clean instrumental track.
-* **Pitch Extraction:** Powered by `torchcrepe` to extract, cleanly quantize, and visualize accurate pitch lines for real-time sing-along (with adjustable confidence thresholds).
-* **Real-Time Pitch Feedback:** Not only can you see the original track's pitch, but the player also visualizes the pitch you are currently singing, giving you immediate real-time feedback on your performance!
-* **Synchronized Lyrics:** Automatically fetches LRC formatted lyrics via `syncedlyrics` mapped precisely to the audio.
-* **Dedicated Player Window:** Detach the karaoke player to a pop-out dual-screen friendly window. Seamlessly updates with lyrics, current playback time, and dynamic pitch visualization via a robust BroadcastChannel and LocalStorage bridge.
-* **Non-Blocking Processing:** Start playing music from your "Saved" tab while new songs are downloading, separating, and processing into stems in the background. Track processing with live progress bars.
-* **Queue Management:** Drag-and-drop to reorder songs! Add, remove, and skip tracks seamlessly.
-* **Fuzzy Search:** Easily search through your saved library using fuzzy text matching.
+
+* **Just Paste a Link:** Pop in a YouTube URL and the app downloads the audio automatically.
+* **Mix Your Own Tracks:** Because we use AI (Demucs) to separate the vocals and the instruments into different tracks, you can mix exactly how much of each you want! Sometimes when you're singing karaoke, you might just want less of the original vocals without removing them completely to help you stay on track—now you can dial in the perfect mix.
+* **Live Pitch Feedback:** It extracts the exact pitch of the original singer and puts it on screen. As you sing into your mic, you'll see your own pitch line right next to it so you can see how well you're doing. 
+* **Auto-Synced Lyrics:** It scours the web for the `.lrc` file of your song so the words light up perfectly in time with the music.
+* **Dual-Screen Friendly:** You can pop out the actual karaoke player into its own window. This is perfect for putting the lyrics on a TV while you manage the queue on your laptop.
+* **No Waiting Around:** You can play songs from your library while your new YouTube links are downloading and processing in the background.
 
 ---
 
-## 🏗️ Architecture Flow
+## 🚀 How to set it up
 
-1. **Ingestion & Processing (Background Task)**
-   `YouTube URL` ➔ `yt-dlp (Download)` ➔ `Demucs (Stem Separation)` & `syncedlyrics (Fetch LRC)` & `torchcrepe (Extract Pitch)` -> Saved to `./music/`
+**What you need:** Python 3.10 or newer. *(Highly recommended: A decent GPU. The AI vocal removal takes a long time if you're only using a CPU!)*
 
-2. **Playback Engine & Queue State**
-   The main UI manages session queue state, while a persistent multithreading HTTP Media Server serves the files from the `./music/` directory dynamically to avoid locking paths.
+**1. Download the app**
+```bash
+git clone https://github.com/calvinbootsman/CalvinsKaraoke.git
+cd CalvinsKaraoke
+```
 
-3. **Bridge Communication**
-   The browser bridges the Streamlit controller with the dedicated Karaoke window popup using HTML5 `BroadcastChannel` and `LocalStorage`—providing low-latency updates for Play/Pause, scrubbing, and skipping without reloading Streamlit.
+**2. Install the requirements**
+*(Note: If you have an NVIDIA GPU, make sure you install PyTorch with CUDA support first!)*
+```bash
+pip install -r requirements.txt
+```
 
----
+**3. Start it up!**
+Because of how browsers handle audio files, we need to run two quick commands in two separate terminal windows.
 
-## 📦 Setup & Installation
+*Terminal 1 (This handles serving the music files):*
+```bash
+python music/cors_server.py
+```
 
-**Prerequisites:** Python 3.10+ (and a GPU for significantly faster Demucs & Torchcrepe processing).
-
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/calvinbootsman/CalvinsKaraoke.git
-   cd CalvinsKaraoke
-   ```
-
-2. **Install Dependencies:**
-   Ensure you have PyTorch installed with CUDA support if you intend to use GPU acceleration. Then install the project requirements:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-3. **Start the Audio File Server:**
-   The karaoke player needs a local CORS-enabled HTTP server to read the audio data for pitch extraction and playback. Open a separate terminal and run:
-   ```bash
-   python music/cors_server.py
-   ```
-
-4. **Run the Application:**
-   ```bash
-   streamlit run app.py
-   ```
+*Terminal 2 (This runs the actual app):*
+```bash
+streamlit run app.py
+```
 
 ---
 
-## 🕹️ Usage
+## 🎮 How to use it
 
-* **Process a Song:** Paste a URL under the "Process New Song" tab and hit "Process". Processing runs asynchronously with progress bars so your UI remains responsive.
-* **Saved Music:** View your catalog, check if processing was fully completed (All Stems & Pitch & Lyrics), or optionally hit the "Reprocess" button to catch missing stems without deleting the song.
-* **Queue It Up:** Add songs, view the active Queue, or instantly play from the front.
-* **Karaoke Window:** Interacting with the player in the main UI will automatically pop out the dedicated Karaoke window! Then just sing!
-
----
-
-## 🛠️ Tech Stack
-* **Frontend Controller:** Streamlit
-* **Player UI:** Vanilla HTML/JS, embedded as an iframe, detached via Window Popup
-* **Backend Utilities:** `yt-dlp`, `demucs`, `torchcrepe`, `syncedlyrics`
-* **Local HTTP Server:** Python ThreadingHTTPServer
+1. **Add Songs:** Go to the "Process New Song" tab, paste a YouTube link, and hit Process. 
+2. **Manage your Library:** Check out the "Saved" tab to see everything you've downloaded. If a song is missing lyrics or pitch data, just hit "Reprocess" to fix it.
+3. **Queue it up:** Drag and drop songs into your Queue.
+4. **Sing!:** As soon as you interact with the player, the Karaoke Window will pop out. Grab a mic (make sure your browser has microphone permissions allowed), and start singing!
 
 ---
 
+## 🛠️ Nerd Stuff (How it works under the hood)
+
+If you're curious about the tech stack:
+* **The UI:** Built with Streamlit for the main controls, and vanilla HTML/JS for the pop-out player. 
+* **The Brains:** Uses `yt-dlp` to download, `demucs` to remove vocals, `torchcrepe` to map the pitch, and `syncedlyrics` to find the words.
+* **The Bridge:** The main Streamlit app and the pop-out window talk to each other instantly using your browser's HTML5 `BroadcastChannel` and `LocalStorage`. No lag!
+
+---
 *Made with ❤️ for karaoke nights.*
