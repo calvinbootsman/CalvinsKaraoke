@@ -124,7 +124,7 @@ with main_col:
 
                     if not (song_dir / "song.lrc").exists():
                         st.session_state.bg_tasks[song_title]["msg"] = "Fetching lyrics..."
-                        get_lyrics(song_dir, song_title)
+                        get_lyrics(song_dir, song_title, progress_cb=prog_cb)
                     
                     st.session_state.bg_tasks[song_title]["state"] = "done"
                     st.session_state.bg_tasks[song_title]["msg"] = "Complete"

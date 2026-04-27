@@ -385,8 +385,13 @@ def render_saved_music_panel(filtered_songs: list) -> None:
                             tid = f"{song_dir.name} (lyrics)"
                             st.session_state.bg_tasks[tid] = {"state": "running", "msg": "Fetching lyrics..."}
                             def worker_lyrics(s_dir, task_id):
+                                def cb(msg: str, progress: float | None = None):
+                                    if task_id in st.session_state.bg_tasks:
+                                        st.session_state.bg_tasks[task_id]["msg"] = msg
+                                        if progress is not None:
+                                            st.session_state.bg_tasks[task_id]["progress"] = progress
                                 try:
-                                    get_lyrics(s_dir, s_dir.name)
+                                    get_lyrics(s_dir, s_dir.name, progress_cb=cb)
                                     st.session_state.bg_tasks[task_id]["state"] = "done"
                                 except Exception as e:
                                     st.session_state.bg_tasks[task_id]["state"] = "error"

@@ -8,5 +8,6 @@ librosa
 scipy
 numpy
 matplotlib
-st-keyup
+# st-keyup
 streamlit-sortables
+openai-whisper

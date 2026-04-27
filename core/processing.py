@@ -122,13 +122,142 @@ def separate_audio_into_stems(audio_path: Path, song_dir: Path, progress_cb: Opt
     shutil.copy2(no_vocals_src, song_dir / "no_vocals.mp3")
 
 
-def get_lyrics(song_dir: Path, song_title: str) -> None:
+def get_lyrics(song_dir: Path, song_title: str, progress_cb: Optional[Callable[[str, Optional[float]], None]] = None) -> None:
     song_path = song_dir / "song.lrc"
     if song_path.exists():
         return
 
-    lrc_text = search(song_title)
-    song_path.write_text(lrc_text or "", encoding="utf-8")
+    vocals_path = song_dir / "vocals.mp3"
+    whisper_text = ""
+    whisper_segments = []
+
+    if vocals_path.exists():
+        if progress_cb:
+            progress_cb("Loading Whisper model...", 0.1)
+        import whisper
+        import torch
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        model = whisper.load_model("base", device=device)
+        
+        if progress_cb:
+            progress_cb("Transcribing vocals to verify lyrics...", 0.3)
+        result = model.transcribe(str(vocals_path), language="en")
+        whisper_text = result["text"].lower()
+        whisper_segments = result["segments"]
+
+    from libs.syncedlyrics.syncedlyrics.providers import Musixmatch, Lrclib, NetEase, Megalobiz, Genius
+    providers = [Musixmatch(), Lrclib(), NetEase(), Megalobiz(), Genius()]
+    best_lrc = None
+    best_ratio = -1.0
+    
+    import re
+    import difflib
+    
+    for i, provider in enumerate(providers):
+        if progress_cb:
+            progress_cb(f"Checking provider {provider.__class__.__name__}...", 0.5 + (0.1 * min(i, 4)))
+        
+        try:
+            lrc_result = provider.get_lrc(song_title)
+            if not lrc_result:
+                continue
+                
+            from libs.syncedlyrics.syncedlyrics.utils import TargetType
+            lrc_text = str(lrc_result)
+            if hasattr(lrc_result, 'to_str'):
+                lrc_text = lrc_result.to_str(TargetType.PREFER_SYNCED)
+            elif isinstance(lrc_result, str):
+                lrc_text = lrc_result
+
+            if not lrc_text:
+                continue
+
+            if not re.search(r"[\[<]\d+:\d+(?:\.\d+)?[\]>]", lrc_text):
+                continue
+
+            lrc_plain = re.sub(r"[\[<]\d+:\d+(?:\.\d+)?[\]>]", "", lrc_text)
+            lrc_plain = " ".join(lrc_plain.split()).lower()
+            
+            if not whisper_text:
+                best_lrc = lrc_text
+                break
+                
+            whisper_plain = " ".join(whisper_text.split())
+            ratio = difflib.SequenceMatcher(None, lrc_plain, whisper_plain).ratio()
+            
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best_lrc = lrc_text
+                with open("lyrics_debug.txt", "a", encoding="utf-8") as f:
+                    f.write(f"Provider: {provider.__class__.__name__} | Global Ratio: {ratio}\n")
+                
+            if ratio > 0.85:
+                break
+                
+        except Exception as e:
+            continue
+            
+    if best_lrc:
+        with open("lyrics_debug.txt", "a", encoding="utf-8") as f:
+            f.write(f"\nEvaluating offset. Best global textual ratio was: {best_ratio}\n")
+            
+        if whisper_segments:
+            lrc_entries = []
+            for line in best_lrc.splitlines():
+                matches = list(re.finditer(r"[\[<](\d+):(\d+(?:\.\d+)?)[\]>]", line))
+                if matches:
+                    text = line[matches[-1].end():].strip()
+                    for m in matches:
+                        t_sec = int(m.group(1)) * 60 + float(m.group(2))
+                        lrc_entries.append((t_sec, text))
+            
+            best_overall_ratio = 0
+            offset = None
+            
+            for wh_seg in whisper_segments:
+                wh_text = re.sub(r'[^a-z ]', '', wh_seg["text"].lower()).strip()
+                wh_words = wh_text.split()
+                if len(wh_words) < 3: 
+                    continue
+                
+                for lrc_time, lrc_text in lrc_entries:
+                    l_text = re.sub(r'[^a-z ]', '', lrc_text.lower()).strip()
+                    if len(l_text.split()) < 3: 
+                        continue
+                        
+                    if l_text in wh_text or wh_text in l_text:
+                        r = 1.0
+                    else:
+                        r = difflib.SequenceMatcher(None, wh_text, l_text).ratio()
+                        
+                    if r > best_overall_ratio:
+                        best_overall_ratio = r
+                        offset = wh_seg["start"] - lrc_time
+                        
+            with open("lyrics_debug.txt", "a", encoding="utf-8") as f:
+                f.write(f"Line match check | Best Line Ratio: {best_overall_ratio} | Computed Offset: {offset}\n")
+                        
+            if offset is not None and abs(offset) > 1.0 and best_overall_ratio >= 0.4:
+                if progress_cb:
+                    progress_cb(f"Applying auto-offset ({offset:.2f}s)...", 0.9)
+                
+                def shift_match(m):
+                    open_bracket = m.group(1)
+                    mm = int(m.group(2))
+                    ss = float(m.group(3))
+                    close_bracket = m.group(4)
+                    time_sec = (mm * 60) + ss + offset
+                    time_sec = max(0.0, time_sec)
+                    new_mm = int(time_sec // 60)
+                    new_ss = time_sec % 60
+                    return f"{open_bracket}{new_mm:02d}:{new_ss:05.2f}{close_bracket}"
+                    
+                best_lrc = re.sub(r"([\[<])(\d+):(\d+(?:\.\d+)?)([\]>])", shift_match, best_lrc)
+            else:
+                with open("lyrics_debug.txt", "a", encoding="utf-8") as f:
+                    f.write("Offset NOT applied (ratio < 0.4 or drift < 1.0s).\n")
+
+        song_path.write_text(best_lrc or "", encoding="utf-8")
 
 def extract_audio_torchcrepe(audio_path: Path, song_dir: Path, progress_cb: Optional[Callable[[str, Optional[float]], None]] = None):
     if progress_cb:
