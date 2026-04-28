@@ -3,6 +3,7 @@
 /Modelfile
 /__pycache__
 *.pyc
-/music
+# /music
 /separated
 /scratch
+/data
