@@ -8,10 +8,15 @@ from core.server import ensure_media_server
 from state.session import log_debug_event
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
+STATIC_DIR = Path(__file__).resolve().parent.parent.parent.parent / "static"
 
 
 def _read_template(name: str) -> str:
     return (TEMPLATES_DIR / name).read_text(encoding="utf-8")
+
+
+def _read_static(filepath: str) -> str:
+    return (STATIC_DIR / filepath).read_text(encoding="utf-8")
 
 
 def render_player_bridge() -> None:
@@ -21,7 +26,7 @@ def render_player_bridge() -> None:
     player_url = f"{media_server_base_url}/_karaoke_player.html"
 
     player_html = _read_template("player.html")
-    shared_lyrics_js = _read_template("shared_lyrics.js")
+    shared_lyrics_js = _read_static("js/shared_lyrics.js")
 
     command_file = MUSIC_DIR / "_karaoke_command.json"
     command_file_payload = command_payload if isinstance(command_payload, dict) else {}

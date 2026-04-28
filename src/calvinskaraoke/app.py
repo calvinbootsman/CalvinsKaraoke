@@ -12,6 +12,7 @@ from core.file_utils import (
 from core.playback import get_effective_current_time
 from core.playback import next_action
 from core.processing import download_audio, get_lyrics, get_song_title, separate_audio_into_stems, extract_audio_torchcrepe
+from core.server import ensure_media_server
 from state.playback import sync_playback_with_queue
 from state.session import (
     hydrate_session_from_runtime_state,
@@ -35,6 +36,7 @@ st.set_page_config(layout="wide", page_title="Calvin's Karaoke")
 st.title("Calvin's Karaoke")
 
 MUSIC_DIR.mkdir(exist_ok=True)
+MEDIA_URL = ensure_media_server()
 hydrate_session_from_runtime_state()
 initialize_queue_state()
 initialize_playback_state()

@@ -95,7 +95,7 @@ def render_overview_player() -> None:
                 st.rerun()
 
     with control_cols[1]:
-        if current_song:
+        if current_song or queue:
             if st.button("Stop", use_container_width=True, key="stop_button"):
                 stop_action()
                 st.rerun()
