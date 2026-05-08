@@ -62,12 +62,15 @@ def download_audio(url: str, song_dir: Path, progress_cb: Optional[Callable[[str
 
 def separate_audio_into_stems(audio_path: Path, song_dir: Path, progress_cb: Optional[Callable[[str, Optional[float]], None]] = None) -> None:
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    demucs_base_output_dir = DEMUX_OUTPUT_ROOT.parent
     cmd = [
         sys.executable,
         "-m",
         "demucs.separate",
         "--device",
         device,
+        "--out",
+        str(demucs_base_output_dir),
         "--mp3",
         "--two-stems",
         "vocals",
@@ -111,12 +114,27 @@ def separate_audio_into_stems(audio_path: Path, song_dir: Path, progress_cb: Opt
     if process.returncode != 0:
         raise RuntimeError(f"Demucs process failed with return code {process.returncode}")
 
-    demucs_song_dir = DEMUX_OUTPUT_ROOT / audio_path.stem
-    vocals_src = demucs_song_dir / "vocals.mp3"
-    no_vocals_src = demucs_song_dir / "no_vocals.mp3"
+    candidate_dirs = [
+        DEMUX_OUTPUT_ROOT / audio_path.stem,
+        Path("separated") / DEMUX_MODEL / audio_path.stem,  # Legacy/default Demucs output path.
+    ]
+    vocals_src = None
+    no_vocals_src = None
 
-    if not vocals_src.exists() or not no_vocals_src.exists():
-        raise FileNotFoundError("Demucs did not generate expected stem files.")
+    for candidate_dir in candidate_dirs:
+        candidate_vocals = candidate_dir / "vocals.mp3"
+        candidate_no_vocals = candidate_dir / "no_vocals.mp3"
+        if candidate_vocals.exists() and candidate_no_vocals.exists():
+            vocals_src = candidate_vocals
+            no_vocals_src = candidate_no_vocals
+            break
+
+    if vocals_src is None or no_vocals_src is None:
+        searched = "\n".join(str(path) for path in candidate_dirs)
+        raise FileNotFoundError(
+            "Demucs did not generate expected stem files. Searched:\n"
+            f"{searched}"
+        )
 
     shutil.copy2(vocals_src, song_dir / "vocals.mp3")
     shutil.copy2(no_vocals_src, song_dir / "no_vocals.mp3")
